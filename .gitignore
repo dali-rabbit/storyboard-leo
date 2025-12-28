@@ -13,21 +13,20 @@ ENV/
 .env
 .env.local
 
-# 插件私有配置
 # ======================
 # 插件系统：只保留 example 模板
 # ======================
 
-# 1. 忽略 plugins/ 下所有子目录（递归）
-plugins/*/
-
-# 2. 但显式保留以下内容（取消忽略）
-!plugins/__init__.py        # 插件加载器必需
-!plugins/example/           # 示例插件目录（保留整个目录）
-!plugins/example/**         # 保留 example 下所有文件（包括 .env.example, plugin.py 等）
-
-# 3. （可选）即使保留 example，也忽略其 .env（私钥）
-plugins/example/.env
+# 忽略 plugins/ 下所有内容（先全部忽略）
+/plugins/*
+# 取消忽略 plugins/__init__.py
+!/plugins/__init__.py
+# 取消忽略 plugins/example/ 整个目录
+!/plugins/example/
+# 取消忽略 plugins/example/ 下的所有文件和子目录
+!/plugins/example/**
+# 但仍然忽略每个插件（包括 example）的 .env（私钥安全）
+/plugins/*/.env
 
 # 历史数据（可选）
 history/

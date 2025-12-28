@@ -1,0 +1,65 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.venv/
+ENV/
+
+# Environment variables
+.env
+.env.local
+
+# 插件私有配置
+# ======================
+# 插件系统：只保留 example 模板
+# ======================
+
+# 1. 忽略 plugins/ 下所有子目录（递归）
+plugins/*/
+
+# 2. 但显式保留以下内容（取消忽略）
+!plugins/__init__.py        # 插件加载器必需
+!plugins/example/           # 示例插件目录（保留整个目录）
+!plugins/example/**         # 保留 example 下所有文件（包括 .env.example, plugin.py 等）
+
+# 3. （可选）即使保留 example，也忽略其 .env（私钥）
+plugins/example/.env
+
+# 历史数据（可选）
+history/
+
+
+# Flask instance folder
+instance/
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Uploaded and generated files
+uploads/
+static/uploads/
+static/generated/
+
+# Distribution packages
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

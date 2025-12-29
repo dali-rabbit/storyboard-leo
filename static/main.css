@@ -83,3 +83,162 @@ body {
 .dashed-upload:hover {
     border-color: #6a5acd;
 }
+
+/* ———————— 快捷栏侧边栏 ———————— */
+.quick-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    background: #1e1e1e;
+    border-right: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    z-index: 1030; /* 高于 Bootstrap 默认 */
+    transition: width 0.3s ease;
+    width: 60px;
+  }
+  
+  .quick-sidebar:not(.collapsed) {
+    width: 160px;
+  }
+  
+  .sidebar-toggle {
+    width: 100%;
+    border: none;
+    border-bottom: 1px solid #333;
+    border-radius: 0;
+    padding: 12px 0;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  
+  .quick-items {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .quick-item {
+    padding: 12px 16px;
+    color: #ccc;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    white-space: nowrap;
+    transition: background 0.2s;
+  }
+  
+  .quick-item:hover {
+    background: #2a2a2a;
+    color: #fff;
+  }
+  
+  .quick-item .icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: #444;
+    border-radius: 50%;
+    font-size: 14px;
+    font-weight: bold;
+  }
+  
+  .quick-sidebar.collapsed .label,
+  .quick-sidebar.collapsed .sidebar-toggle .icon {
+    display: none;
+  }
+  
+  .quick-sidebar:not(.collapsed) .sidebar-toggle .icon {
+    transform: rotate(180deg);
+  }
+
+  /* 深色下拉菜单优化 */
+.dropdown-menu.bg-dark {
+    --bs-dropdown-bg: #1e1e1e;
+    --bs-dropdown-link-color: #ccc;
+    --bs-dropdown-link-hover-color: #fff;
+    --bs-dropdown-link-hover-bg: #2a2a2a;
+    --bs-dropdown-divider-bg: #333;
+  }
+
+  /* 快捷栏项内部布局 */
+.quick-item {
+    padding: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  .quick-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+  }
+  
+  /* 缩略图容器 */
+  .quick-thumbnails {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    padding: 0 6px;
+    max-height: 120px; /* 最多两行：3×2=6张 */
+    overflow: hidden;
+  }
+  
+  .quick-sidebar.collapsed .quick-thumbnails,
+  .quick-sidebar.collapsed .quick-header .label {
+    display: none !important;
+  }
+  
+  /* 缩略图样式 */
+  .quick-thumbnails  .quick-thumb {
+    position: relative;
+    width: 100%;
+    padding-top: 100%; /* 1:1 aspect */
+    cursor: grab;
+  }
+  
+  .quick-thumbnails  .quick-thumb img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 3px;
+    border: 1px solid #444;
+  }
+  
+  /* 移除按钮 */
+  .quick-thumbnails  .quick-thumb .remove-btn {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 16px;
+    height: 16px;
+    background: #ff4d4d;
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  
+  .quick-thumbnails  .quick-thumb:hover .remove-btn {
+    opacity: 1;
+  }
+  
+  /* 拖拽视觉反馈 */
+  .quick-thumbnails  .quick-thumb.dragging {
+    opacity: 0.6;
+  }
+  

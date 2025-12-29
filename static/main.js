@@ -1,7 +1,39 @@
 // main.js
 (function () {
   const state = window.AIImageState;
-  const ITEMS_PER_PAGE = 6;
+  const ITEMS_PER_PAGE = 12;
+  // 快捷栏数据结构：{ "1": [url1, url2, ...], "2": [], ... }
+  let quickSlots = JSON.parse(localStorage.getItem("quickSlots")) || {
+    "1": [], "2": [], "3": [], "4": [], "5": []
+  };
+
+  function saveQuickSlots() {
+    console.log("save");
+    localStorage.setItem("quickSlots", JSON.stringify(quickSlots));
+  }
+
+  function renderQuickSlot(slot) {
+    console.log("render");
+    const $container = $(`.quick-item[data-slot="${slot}"] .quick-thumbnails`);
+    $container.empty();
+    const urls = quickSlots[slot] || [];
+    urls.forEach(url => {
+      const $thumb = $(`
+        <div class="quick-thumb" draggable="true" data-url="${url}">
+          <img src="${url}" loading="lazy">
+          <span class="remove-btn">×</span>
+        </div>
+      `);
+      $container.append($thumb);
+    });
+  }
+  
+  // 初始化所有快捷栏
+  function initQuickSlots() {
+    for (let i = 1; i <= 5; i++) {
+      renderQuickSlot(String(i));
+    }
+  }
 
   // ===== 提示词预览 =====
   function updatePromptPreview() {
@@ -137,6 +169,20 @@
                                     data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
                                     使用参数
                                 </button>
+                                <button class="btn btn-sm btn-outline-primary w-100 mt-1 dropdown-toggle"
+                                        type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                  发送到…
+                                </button>
+                                <ul class="dropdown-menu bg-dark text-light w-100">
+                                  <li><a class="dropdown-item text-light" href="#" data-target="slot-1">快捷栏1</a></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="slot-2">快捷栏2</a></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="slot-3">快捷栏3</a></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="slot-4">快捷栏4</a></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="slot-5">快捷栏5</a></li>
+                                  <li><hr class="dropdown-divider bg-secondary"></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="image-split">图片拆分</a></li>
+                                  <li><a class="dropdown-item text-light" href="#" data-target="storyboard">故事板</a></li>
+                                </ul>
                             </div>
                         </div>
                     </div>
@@ -176,6 +222,7 @@
     $(document).on("click", ".use-params", function () {
       const item = $(this).data("item");
       const params = item.params;
+
 
       // 1. 恢复提示词模式和内容
       if (params.prompt.includes("生成四格分镜")) {
@@ -243,6 +290,10 @@
     updatePromptPreview();
     loadHistoryPage(1);
 
+
+    // 初始化快捷栏
+    initQuickSlots();
+
     // 如果你希望在切换标签时执行某些 JS 逻辑（例如懒加载、初始化组件等），可以监听 Bootstrap 的 shown.bs.tab 事件：
     document.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
       tab.addEventListener("shown.bs.tab", (event) => {
@@ -251,5 +302,69 @@
         // 例如：if (targetId === '#storyboard') 初始化故事板编辑器
       });
     });
+
+    // 侧边栏展开/收起
+    $("#toggleSidebarBtn").click(function () {
+      $("#quickSidebar").toggleClass("collapsed");
+    });
+
+    $(document).on("click", ".dropdown-item", function (e) {
+      e.preventDefault();
+      const target = $(this).data("target");
+      const item = $(this).closest(".card").find(".view-params").data("item");
+    
+      if (target.startsWith("slot-")) {
+        const slot = target.split("-")[1]; // "slot-1" → "1"
+        const imageUrl = item.result_paths[0]; // 假设用首图
+        if (!imageUrl) return;
+    
+        // 去重 + 限6张
+        let list = quickSlots[slot] || [];
+        if (!list.includes(imageUrl)) {
+          if (list.length >= 6) {
+            alert(`快捷栏${slot}已满（最多6张）`);
+            return;
+          }
+          list.push(imageUrl);
+          quickSlots[slot] = list;
+          saveQuickSlots();
+          renderQuickSlot(slot);
+        }
+        // 可选：自动展开侧边栏
+        $("#quickSidebar").removeClass("collapsed");
+      } else if (target === "image-split") {
+        // TODO: 跳转到图片拆分 Tab
+        $('#image-split-tab').tab('show');
+      } else if (target === "storyboard") {
+        // TODO: 跳转到故事板 Tab
+        $('#storyboard-tab').tab('show');
+      }
+    });
+
+
+    // 移除图片
+    $(document).on("click", ".quick-thumb .remove-btn", function (e) {
+      e.stopPropagation();
+      const $thumb = $(this).closest(".quick-thumb");
+      const url = $thumb.data("url");
+      const slot = $thumb.closest(".quick-item").data("slot");
+
+      quickSlots[slot] = (quickSlots[slot] || []).filter(u => u !== url);
+      saveQuickSlots();
+      renderQuickSlot(slot);
+    });
+
+    // 拖拽到上传区
+    $(document).on("dragstart", ".quick-thumb", function (e) {
+      $(this).addClass("dragging");
+      e.originalEvent.dataTransfer.setData("text/plain", $(this).data("url"));
+    });
+
+    $(document).on("dragend", ".quick-thumb", function () {
+      $(this).removeClass("dragging");
+    });
+
+
+
   });
 })();

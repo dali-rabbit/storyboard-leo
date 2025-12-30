@@ -46,48 +46,13 @@
         <!-- 左侧快捷栏 -->
         <div id="quickSidebar" class="quick-sidebar collapsed">
             <!-- 展开/收起按钮 -->
-            <button id="toggleSidebarBtn" class="btn btn-dark sidebar-toggle" type="button">
-            <span class="icon">◀</span>
+            <button
+                id="toggleSidebarBtn"
+                class="btn btn-dark sidebar-toggle"
+                type="button"
+            >
+                <span class="icon" id="shortcut-icon">★</span>
             </button>
-        
-            <!-- 快捷栏项 -->
-            <div class="quick-items">
-                <div class="quick-item" data-slot="1">
-                    <div class="quick-header">
-                        <span class="icon">1</span>
-                        <span class="label">快捷栏1</span>
-                    </div>
-                    <div class="quick-thumbnails"></div>
-                </div>
-                <div class="quick-item" data-slot="2">
-                    <div class="quick-header">
-                        <span class="icon">2</span>
-                        <span class="label">快捷栏2</span>
-                    </div>
-                    <div class="quick-thumbnails"></div>
-                </div>
-                <div class="quick-item" data-slot="3">
-                    <div class="quick-header">
-                        <span class="icon">3</span>
-                        <span class="label">快捷栏3</span>
-                    </div>
-                    <div class="quick-thumbnails"></div>
-                </div>
-                <div class="quick-item" data-slot="4">
-                    <div class="quick-header">
-                        <span class="icon">4</span>
-                        <span class="label">快捷栏4</span>
-                    </div>
-                    <div class="quick-thumbnails"></div>
-                </div>
-                <div class="quick-item" data-slot="5">
-                    <div class="quick-header">
-                        <span class="icon">5</span>
-                        <span class="label">快捷栏5</span>
-                    </div>
-                    <div class="quick-thumbnails"></div>
-                </div>
-            </div>
         </div>
         <div class="container my-4">
             <!-- 标题 + 标签 -->
@@ -123,7 +88,7 @@
                                 aria-controls="image-split"
                                 aria-selected="false"
                             >
-                                图片拆分
+                                图片编辑
                             </button>
                         </li>
                         <li class="nav-item" role="presentation">
@@ -418,11 +383,52 @@
                 </div>
             </div>
         </div>
+        <!-- 拖拽目标面板（初始隐藏） -->
+        <div
+            id="dragTargetOverlay"
+            class="drag-target-overlay"
+            style="display: none"
+        >
+            <div class="drag-target-mask"></div>
+            <div class="drag-targets d-flex justify-content-center gap-4 mt-5">
+                <div class="drag-target-item text-center" data-target="quick">
+                    <div
+                        class="icon bg-primary rounded-circle d-flex align-items-center justify-content-center mx-auto mb-2"
+                        style="width: 60px; height: 60px"
+                    >
+                        ★
+                    </div>
+                    <div>快捷访问</div>
+                </div>
+                <div class="drag-target-item text-center" data-target="edit">
+                    <div
+                        class="icon bg-success rounded-circle d-flex align-items-center justify-content-center mx-auto mb-2"
+                        style="width: 60px; height: 60px"
+                    >
+                        ✂️
+                    </div>
+                    <div>图片编辑</div>
+                </div>
+                <div
+                    class="drag-target-item text-center"
+                    data-target="storyboard"
+                >
+                    <div
+                        class="icon bg-info rounded-circle d-flex align-items-center justify-content-center mx-auto mb-2"
+                        style="width: 60px; height: 60px"
+                    >
+                        🎞️
+                    </div>
+                    <div>故事板</div>
+                </div>
+            </div>
+        </div>
         <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.4/js/lightbox.min.js"></script>
         <script src="{{ url_for('static', filename='state.js') }}"></script>
         <script src="{{ url_for('static', filename='upload.js') }}"></script>
+        <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
         <script src="{{ url_for('static', filename='main.js') }}"></script>
     </body>
 </html>

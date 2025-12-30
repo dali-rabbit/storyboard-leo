@@ -9,12 +9,9 @@ from threading import Lock
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory
+
 # 导入你的生成函数
 from test_gen_api import generate_via_image_fallback
-
-
-# app.py
-from plugins import load_plugins
 
 load_dotenv()
 
@@ -269,6 +266,7 @@ def get_history():
                         "id": record["id"],
                         "timestamp": record["timestamp"],
                         "result_paths": record.get("local_result_paths", []),
+                        "result_urls": record.get("result_urls", []),
                         "input_paths": record.get("local_input_paths", []),
                         "input_urls": record.get("image_urls", []),
                         "params": {
@@ -293,5 +291,31 @@ def get_history():
     )
 
 
+@app.route("/quick-upload", methods=["POST"])
+def quick_upload():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "No file"}), 400
+    local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
+    if not local_path:
+        return jsonify({"error": "Save failed"}), 500
+
+    # 上传到 ImgBB
+    with open(local_path, "rb") as f:
+        imgbb_resp = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": IMGBB_API_KEY},
+            files={"image": f},
+        )
+    if imgbb_resp.status_code != 200:
+        return jsonify({"error": "ImgBB failed"}), 500
+    return jsonify(
+        {
+            "url": imgbb_resp.json()["data"]["url"],
+            "local_path": "/" + local_path.replace("\\", "/"),
+        }
+    )
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)

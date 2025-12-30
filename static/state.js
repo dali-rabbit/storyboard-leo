@@ -52,5 +52,15 @@ window.AIImageState = (function () {
       uploadedImageUrls = [...urls];
       uploadedLocalPaths = [...paths]; // mock 文件名
     },
+    addFromQuickAccess(localPath, remoteUrl) {
+      const exists =
+        uploadedLocalPaths.includes(localPath) ||
+        uploadedImageUrls.includes(remoteUrl);
+      if (exists) return false;
+      if (uploadedLocalPaths.length >= 10) return false;
+      uploadedLocalPaths.push(localPath);
+      uploadedImageUrls.push(remoteUrl);
+      return true;
+    },
   };
 })();

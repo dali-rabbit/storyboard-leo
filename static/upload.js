@@ -72,13 +72,114 @@
 
     items.forEach((item) => {
       item.setAttribute("draggable", true);
+      const uploadContainer = document.querySelector("#uploadPreview");
 
-      item.addEventListener("dragstart", () => {
+      item.addEventListener("dragstart", function (e) {
         dragSrcEl = item;
         item.classList.add("dragging");
         document
           .querySelectorAll(".image-label")
           .forEach((el) => (el.style.display = "none"));
+
+        // 1. 记录拖拽源
+        const index = parseInt(item.getAttribute("data-index"));
+        const localPath = state.getLocalPaths()[index];
+        const remoteUrl = state.getUploadedUrls()[index];
+        window.__currentDragItem = {
+          localPath: localPath,
+          remoteUrl: remoteUrl,
+        };
+
+        // 2. 自定义拖影（可选增强体验）
+        const img = item.querySelector("img").cloneNode(true);
+        img.style.width = "80px";
+        img.style.height = "80px";
+        img.style.opacity = "0.8";
+        const ghost = document.createElement("div");
+        ghost.appendChild(img);
+        ghost.style.position = "absolute";
+        ghost.style.top = "-9999px";
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 40, 40);
+
+        // ===== 新增：初始化拖拽状态 =====
+        window.__isDraggingInsideUpload = true; // 默认在内部
+        $("#dragTargetOverlay").hide(); // 确保开始时不显示
+
+        // 清理之前的监听（防止重复）
+        if (window.__dragOverHandler) {
+          document.removeEventListener("dragover", window.__dragOverHandler);
+        }
+
+        // 监听全局 dragover 判断位置
+        const dragOverHandler = (ev) => {
+          const rect = uploadContainer.getBoundingClientRect();
+          const x = ev.clientX;
+          const y = ev.clientY;
+
+          const isInside =
+            x >= rect.left &&
+            x <= rect.right &&
+            y >= rect.top &&
+            y <= rect.bottom;
+
+          if (isInside) {
+            if (!window.__isDraggingInsideUpload) {
+              // 从外部回到内部
+              window.__isDraggingInsideUpload = true;
+              $("#dragTargetOverlay").hide();
+            }
+          } else {
+            if (window.__isDraggingInsideUpload) {
+              // 首次离开上传区域
+              window.__isDraggingInsideUpload = false;
+              $("#dragTargetOverlay").show(); // 显示全屏引导
+            }
+          }
+        };
+
+        console.log("绑定全局拖拽事件");
+        window.__dragOverHandler = dragOverHandler;
+        document.addEventListener("dragover", dragOverHandler);
+      });
+
+      item.addEventListener("dragend", function () {
+        items.forEach((el) => {
+          el.classList.remove("dragging");
+          el.style.opacity = "";
+        });
+        document
+          .querySelectorAll(".image-label")
+          .forEach((el) => (el.style.display = ""));
+
+        // 检查是否拖到了快捷侧边栏
+        if (window.__currentDragItem && window.__dragEndCoords) {
+          const { x, y } = window.__dragEndCoords;
+          const dropTarget = document.elementFromPoint(x, y);
+          const inSidebar = dropTarget?.closest("#quickSidebar");
+          if (inSidebar) {
+            window.QuickAccess?.addImage(window.__currentDragItem);
+          }
+        }
+
+        // 清理
+        delete window.__currentDragItem;
+        delete window.__dragEndCoords;
+
+        item.classList.remove("dragging");
+        window.__currentDragItem = null;
+        window.__isDraggingInsideUpload = false;
+
+        if (window.__dragOverHandler) {
+          document.removeEventListener("dragover", window.__dragOverHandler);
+          window.__dragOverHandler = null;
+        }
+
+        $("#dragTargetOverlay").hide(); // 无论结果，拖拽结束就隐藏
+
+        // 清理 ghost image（可选）
+        const ghost = document.querySelector('div[style*="top: -9999px"]');
+        if (ghost) ghost.remove();
       });
 
       item.addEventListener("dragover", (e) => e.preventDefault());
@@ -99,16 +200,6 @@
           state.swapIndices(srcIndex, targetIndex);
           renderUploadPreview();
         }
-      });
-
-      item.addEventListener("dragend", () => {
-        items.forEach((el) => {
-          el.classList.remove("dragging");
-          el.style.opacity = "";
-        });
-        document
-          .querySelectorAll(".image-label")
-          .forEach((el) => (el.style.display = ""));
       });
     });
   }

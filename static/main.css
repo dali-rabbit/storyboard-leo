@@ -286,3 +286,8 @@ body {
     overflow-x: auto;
     padding: 10px;
 }
+
+.highlight-new {
+    background-color: #ffeb3b !important;
+    transition: background-color 1.5s ease;
+}

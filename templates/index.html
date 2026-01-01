@@ -361,14 +361,65 @@
                         </div>
                     </div>
 
-                    <!-- 图片拆分 -->
+                    <!-- 图片编辑 -->
                     <div
                         class="tab-pane fade"
                         id="image-split"
                         role="tabpanel"
                         aria-labelledby="image-split-tab"
                     >
-                        <p>图片拆分功能开发中...</p>
+                        <!-- 标题 + 工具栏 -->
+                        <div
+                            class="d-flex justify-content-between align-items-center mb-3"
+                        >
+                            <h5 class="mb-0">图片编辑</h5>
+                            <div>
+                                <button
+                                    id="cropToQuadrantsBtn"
+                                    class="btn btn-success btn-sm me-2"
+                                    disabled
+                                >
+                                    四格切图
+                                </button>
+                                <button
+                                    id="saveCroppedImagesBtn"
+                                    class="btn btn-primary btn-sm"
+                                    disabled
+                                >
+                                    保存四格裁剪
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 编辑区域容器 -->
+                        <div
+                            id="imageEditContainer"
+                            class="position-relative border rounded bg-dark-subtle"
+                            style="width: 100%; height: 70vh"
+                        >
+                            <!-- 占位提示（初始显示） -->
+                            <div
+                                id="imageEditPlaceholder"
+                                class="d-flex justify-content-center align-items-center h-100 w-100 text-muted"
+                                style="position: absolute; inset: 0; z-index: 1"
+                            >
+                                请拖入一张图片以开始编辑
+                            </div>
+
+                            <!-- Canvas（始终存在，但初始无内容） -->
+                            <canvas
+                                id="editCanvas"
+                                class="w-100 h-100"
+                                style="display: block; background: #121212"
+                            ></canvas>
+
+                            <!-- 隐藏的图片加载器 -->
+                            <img
+                                id="hiddenImageLoader"
+                                style="display: none"
+                                crossorigin="anonymous"
+                            />
+                        </div>
                     </div>
 
                     <!-- 故事板 -->
@@ -429,6 +480,7 @@
         <script src="{{ url_for('static', filename='state.js') }}"></script>
         <script src="{{ url_for('static', filename='upload.js') }}"></script>
         <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit.js') }}"></script>
         <script src="{{ url_for('static', filename='main.js') }}"></script>
     </body>
 </html>

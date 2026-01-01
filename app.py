@@ -1,14 +1,18 @@
+import base64
+import copy
 import json
 import os
 import shutil
 import uuid
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory
+from PIL import Image
 
 # 导入你的生成函数
 from test_gen_api import generate_via_image_fallback
@@ -315,6 +319,56 @@ def quick_upload():
             "local_path": "/" + local_path.replace("\\", "/"),
         }
     )
+
+
+@app.route("/save-cropped-images", methods=["POST"])
+def save_cropped_images():
+    """接收 Base64 图片列表，保存到 history/results/，返回本地路径"""
+    data = request.get_json()
+    base64_images = data.get("images", [])  # list of "data:image/jpeg;base64,..."
+
+    if not base64_images:
+        return jsonify({"error": "No images provided"}), 400
+
+    saved_paths = []
+    for b64_str in base64_images:
+        try:
+            # 去掉 data URL 前缀（如果有）
+            if b64_str.startswith("data:image"):
+                header, b64_str = b64_str.split(",", 1)
+
+            # 解码 Base64
+            image_data = base64.b64decode(b64_str)
+            image = Image.open(BytesIO(image_data)).convert("RGB")
+
+            # 生成唯一文件名
+            filename = f"{uuid.uuid4().hex}.jpg"
+            filepath = RESULTS_DIR / filename
+            image.save(filepath, "JPEG", quality=92)
+
+            # 返回相对于项目根目录的路径（前端可直接 /history/results/... 访问）
+            rel_path = f"/{filepath.relative_to(Path('.')).as_posix()}"
+            saved_paths.append(rel_path)
+        except Exception as e:
+            print(f"[Save Cropped Image Error] {e}")
+            continue
+
+    return jsonify({"success": True, "local_paths": saved_paths})
+
+
+@app.route("/history-record", methods=["POST"])
+def save_manual_history():
+    data = request.get_json()
+    i = 1
+    for local_result_path in data.get("local_result_paths", []):
+        record_data = copy.deepcopy(data)
+        record_data["local_result_paths"] = [local_result_path]
+        record_id = data.get("id", str(uuid.uuid4()))
+        record_path = HISTORY_DIR / f"{record_id}_{i}.json"
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f, ensure_ascii=False, indent=2)
+        i += 1
+    return jsonify({"success": True})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
 // main.js
+//
+
 (function () {
   const state = window.AIImageState;
   const ITEMS_PER_PAGE = 12;
@@ -123,24 +125,24 @@
         data.records.forEach((item) => {
           const url = item.result_paths[0] || "";
           html += `
-                    <div class="col-6 col-sm-4 col-md-2 mb-3">
-                        <div class="card">
-                            <a href="${url}" data-lightbox="history">
-                              <img src="${url}" class="history-img w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                            </a>
-                            <div class="card-body p-2">
-                                <button class="btn btn-sm btn-outline-light w-100 mt-1 view-params"
-                                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                                    查看参数
-                                </button>
-                                <button class="btn btn-sm btn-outline-primary w-100 mt-1 use-params"
-                                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                                    使用参数
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `;
+            <div class="col-6 col-sm-4 col-md-2 mb-3">
+              <div class="card history-card">
+                <a href="${url}" data-lightbox="history">
+                  <img src="${url}" class="history-img w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                </a>
+                <div class="card-body p-2">
+                  <button class="btn btn-sm btn-outline-light w-100 mt-1 view-params"
+                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                    查看参数
+                  </button>
+                  <button class="btn btn-sm btn-outline-primary w-100 mt-1 use-params"
+                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                    使用参数
+                  </button>
+                </div>
+              </div>
+            </div>
+          `;
         });
         $("#historyList").html(html);
 
@@ -149,6 +151,37 @@
           pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
         }
         $("#historyPagination").html(pg);
+
+        // ✅ 仅在 shouldHighlightNewRecords 为 true 时执行高亮和滚动
+        if (shouldHighlightNewRecords) {
+          shouldHighlightNewRecords = false; // 重置标志，只触发一次
+
+          const cards = document.querySelectorAll("#quick-gen .history-card");
+          const count = Math.min(4, cards.length);
+
+          // 高亮前 4 张
+          for (let i = 0; i < count; i++) {
+            const card = cards[i];
+            card.style.transition = "background-color 1.5s ease";
+            card.style.backgroundColor = "#ffeb3b";
+
+            setTimeout(() => {
+              card.style.backgroundColor = "";
+            }, 1500);
+          }
+
+          // 滚动到 #quick-gen 容器底部（或 historyList 底部）
+          const quickGenContainer = document.getElementById("quick-gen");
+          if (quickGenContainer) {
+            // 使用 smooth 滚动到底部
+            quickGenContainer.scrollIntoView({
+              behavior: "smooth",
+              block: "end",
+            });
+            // 或者如果你希望滚动的是整个页面到底部（取决于布局）：
+            // window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+          }
+        }
       },
     );
   }
@@ -249,6 +282,9 @@
         const targetId = event.target.getAttribute("data-bs-target");
         console.log("切换到标签:", targetId);
         // 例如：if (targetId === '#storyboard') 初始化故事板编辑器
+        if (targetId === "#quick-gen") {
+          loadHistoryPage(1);
+        }
       });
     });
 
@@ -286,7 +322,6 @@
 
       let itemData = null;
       const item = $el.data("history-item");
-      console.log(item);
       itemData = {
         localPath: item?.result_paths?.[0],
         remoteUrl: item?.result_urls?.[0],
@@ -341,15 +376,28 @@
     // 处理 drop
     $(document).on("drop", ".drag-target-item", function (e) {
       e.preventDefault(); // 通常也在这里 preventDefault，防止浏览器默认行为（如打开图片）
-      console.log("拖入");
       const target = $(this).data("target");
       const item = window.__draggedItem || window.__currentDragItem;
-      console.log(target);
-      console.log(item);
 
       if (item && target === "quick") {
-        console.log("拖入目标为quick");
+        // 快捷访问
         window.QuickAccess?.addImage(item);
+      } else if (item && target == "edit") {
+        // 图片编辑
+        // 1. 切换到“图片编辑”标签
+        const editTabBtn = document.querySelector("#image-split-tab");
+        if (editTabBtn) {
+          const tab = new bootstrap.Tab(editTabBtn);
+          tab.show();
+        }
+
+        // 2. 显示图片（优先用 remoteUrl，兼容本地调试时用 localPath）
+        const imgUrl = item.localPath;
+        const $img = $("#editingImage");
+        const $placeholder = $("#imageEditPlaceholder");
+
+        $("#hiddenImageLoader").attr("src", imgUrl);
+        $placeholder.hide();
       }
 
       cleanupDragState();

@@ -371,5 +371,44 @@ def save_manual_history():
     return jsonify({"success": True})
 
 
+@app.route("/history/<record_id>", methods=["DELETE"])
+def delete_history_record(record_id):
+    """删除指定历史记录（JSON + 本地图片）"""
+    try:
+        # 1. 找到 JSON 文件
+        json_path = None
+        for f in HISTORY_DIR.glob("*.json"):
+            if f.stem.startswith(record_id):
+                json_path = f
+                break
+
+        if not json_path:
+            return jsonify({"error": "Record not found"}), 404
+
+        # 2. 读取记录，获取所有本地图片路径
+        with open(json_path, "r", encoding="utf-8") as fp:
+            record = json.load(fp)
+
+        all_local_paths = []
+        all_local_paths.extend(record.get("local_input_paths", []))
+        all_local_paths.extend(record.get("local_result_paths", []))
+
+        # 3. 删除 JSON 文件
+        json_path.unlink()
+
+        # 4. 删除关联的本地图片
+        for rel_path in all_local_paths:
+            if rel_path.startswith("/"):
+                rel_path = rel_path[1:]
+            full_path = Path(rel_path)
+            if full_path.exists():
+                full_path.unlink()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"[Delete Error] {e}")
+        return jsonify({"error": "Delete failed"}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)

@@ -10,7 +10,7 @@
     let text = "";
     if ($("#modeRaw").is(":checked")) {
       text = $("#promptRaw").val();
-    } else {
+    } else if ($("#modeStoryboard").is(":checked")) {
       const pre = $("#prePrompt").val();
       const style = $("#style").val();
       const s1 = $("#shot1").val();
@@ -18,6 +18,22 @@
       const s3 = $("#shot3").val();
       const s4 = $("#shot4").val();
       text = `${pre}，生成四格分镜（${style}）：\n分镜一：${s1}\n分镜二：${s2}\n分镜三：${s3}\n分镜四：${s4}`;
+    } else if ($("#modeCharacter").is(":checked")) {
+      // 角色模式逻辑
+      const views = [];
+      if ($("#viewFront").is(":checked")) views.push("正面全身");
+      if ($("#viewSide").is(":checked")) views.push("侧面全身");
+      if ($("#viewBack").is(":checked")) views.push("背面全身");
+      if ($("#viewFace").is(":checked")) views.push("面部特写");
+      if ($("#viewSolidBg").is(":checked")) views.push("纯色背景");
+
+      if (views.length === 0) {
+        text = "（请至少选择一个视角）";
+      } else {
+        const viewText = views.join("和");
+        const notes = $("#characterNotes").val().trim();
+        text = `给我一个这个角色的${viewText}。要求角色面部特征保持一致。${notes ? " " + notes : ""}`;
+      }
     }
     $("#promptPreview").text(text || "（提示词为空）");
   }
@@ -126,20 +142,10 @@
           const url = item.result_paths[0] || "";
           html += `
             <div class="col-6 col-sm-4 col-md-2 mb-3">
-              <div class="card history-card">
-                <a href="${url}" data-lightbox="history">
-                  <img src="${url}" class="history-img w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                <a href="javascript:void(0);" class="history-img-link">
+                  <img src="${url}" class="w-100 history-img" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
                 </a>
-                <div class="card-body p-2">
-                  <button class="btn btn-sm btn-outline-light w-100 mt-1 view-params"
-                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                    查看参数
-                  </button>
-                  <button class="btn btn-sm btn-outline-primary w-100 mt-1 use-params"
-                    data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                    使用参数
-                  </button>
-                </div>
               </div>
             </div>
           `;
@@ -192,80 +198,19 @@
     $('input[name="mode"]').change(function () {
       $("#rawSection").toggle(this.value === "raw");
       $("#storyboardSection").toggle(this.value === "storyboard");
+      $("#characterSection").toggle(this.value === "character");
       updatePromptPreview();
     });
 
-    $("#promptRaw, #prePrompt, #style, #shot1, #shot2, #shot3, #shot4").on(
-      "input",
+    $(
+      "#promptRaw, #prePrompt, #style, #shot1, #shot2, #shot3, #shot4, #characterNotes",
+    ).on("input", updatePromptPreview);
+
+    // 复选框变化也要触发预览更新
+    $("#characterSection input[type='checkbox']").on(
+      "change",
       updatePromptPreview,
     );
-
-    // 历史记录交互
-    $(document).on("click", ".view-params", function () {
-      const item = $(this).data("item");
-      showParamsModal(item);
-    });
-
-    $(document).on("click", ".use-params", function () {
-      const item = $(this).data("item");
-      const params = item.params;
-
-      // 1. 恢复提示词模式和内容
-      if (params.prompt.includes("生成四格分镜")) {
-        // 判断为 storyboard 模式（可优化为更可靠的方式，如存 mode 字段）
-        $("#modeStoryboard").prop("checked", true).trigger("change");
-        // 简单解析（适用于你当前的格式）
-        const lines = params.prompt.split("\n");
-        const preMatch = lines[0]?.match(/^(.+)，生成四格分镜/);
-        $("#prePrompt").val(preMatch ? preMatch[1] : "");
-
-        const styleMatch = lines[0]?.match(/生成四格分镜（(.+?)）/);
-        $("#style").val(styleMatch ? styleMatch[1] : "");
-
-        $("#shot1").val(lines[1]?.replace("分镜一：", "") || "");
-        $("#shot2").val(lines[2]?.replace("分镜二：", "") || "");
-        $("#shot3").val(lines[3]?.replace("分镜三：", "") || "");
-        $("#shot4").val(lines[4]?.replace("分镜四：", "") || "");
-      } else {
-        $("#modeRaw").prop("checked", true).trigger("change");
-        $("#promptRaw").val(params.prompt);
-      }
-
-      // 2. 恢复分辨率与长宽比
-      $("#resolution").val(params.size || "2K");
-      $("#aspectRatio").val(params.aspect_ratio || "auto");
-
-      // 3. 恢复参考图（清空当前状态，重新加载）
-      // 恢复参考图状态
-      state.clear();
-      if (item.input_paths && item.input_paths.length > 0) {
-        state.setFromUrls(item.input_urls, item.input_paths);
-      }
-
-      // ✅ 关键：调用已有的渲染函数，而不是手写 HTML
-      if (typeof window.UploadModule?.renderPreview === "function") {
-        window.UploadModule.renderPreview();
-      } else {
-        console.warn("UploadModule.renderPreview not available");
-        // 降级处理（可选）
-        $("#uploadPreview").empty();
-        if (item.input_paths?.length) {
-          $("#dropZone .text-muted").text(
-            `已加载 ${item.input_paths.length} 张参考图`,
-          );
-        } else {
-          $("#dropZone .text-muted").html(
-            "📁 拖拽图片至此，或 <u>点击上传</u>",
-          );
-        }
-      }
-
-      // 4. 更新提示词预览
-      updatePromptPreview();
-
-      // 可选：滚动到表单顶部
-      $("html, body").animate({ scrollTop: 0 }, 300);
-    });
 
     $(document).on("click", "#historyPagination .page-link", function (e) {
       e.preventDefault();
@@ -302,12 +247,12 @@
         if (isCurrentlyCollapsed) {
           // 之前是展开，现在 collapsed → 显示文字
           $icon.html("快捷访问");
-          // 渲染快捷图
-          if (window.QuickAccess) window.QuickAccess.renderSidebar();
         } else {
           // 之前是 collapsed，现在展开 → 显示 ★
           $icon.html("★");
         }
+        // 渲染快捷图
+        if (window.QuickAccess) window.QuickAccess.renderSidebar();
       });
     });
 
@@ -373,6 +318,30 @@
       e.preventDefault(); // 关键！否则 drop 不会触发
     });
 
+    /**
+     * 将指定图片载入“图片编辑”标签页并激活
+     * @param {Object} item - 包含 localPath 或 remoteUrl 的对象
+     */
+    function enterImageEditMode(item) {
+      // 1. 切换到“图片编辑”标签
+      const editTabBtn = document.querySelector("#image-split-tab");
+      if (editTabBtn) {
+        const tab = new bootstrap.Tab(editTabBtn);
+        tab.show();
+      }
+
+      // 2. 优先使用本地路径（localPath），没有则用远程 URL（remoteUrl）
+      const imgUrl = item.localPath || item.remoteUrl;
+      if (!imgUrl) {
+        console.warn("No image URL to edit", item);
+        return;
+      }
+
+      // 3. 触发图片加载（与 drag-drop 逻辑一致）
+      $("#hiddenImageLoader").attr("src", imgUrl);
+      $("#imageEditPlaceholder").hide();
+    }
+
     // 处理 drop
     $(document).on("drop", ".drag-target-item", function (e) {
       e.preventDefault(); // 通常也在这里 preventDefault，防止浏览器默认行为（如打开图片）
@@ -383,21 +352,7 @@
         // 快捷访问
         window.QuickAccess?.addImage(item);
       } else if (item && target == "edit") {
-        // 图片编辑
-        // 1. 切换到“图片编辑”标签
-        const editTabBtn = document.querySelector("#image-split-tab");
-        if (editTabBtn) {
-          const tab = new bootstrap.Tab(editTabBtn);
-          tab.show();
-        }
-
-        // 2. 显示图片（优先用 remoteUrl，兼容本地调试时用 localPath）
-        const imgUrl = item.localPath;
-        const $img = $("#editingImage");
-        const $placeholder = $("#imageEditPlaceholder");
-
-        $("#hiddenImageLoader").attr("src", imgUrl);
-        $placeholder.hide();
+        enterImageEditMode(item);
       }
 
       cleanupDragState();
@@ -413,5 +368,190 @@
       window.__draggedItem = null;
       $("#dragTargetOverlay").hide();
     }
+
+    // 点击历史卡片，弹出详情浮窗
+    $(document).on("click", ".history-card", function (e) {
+      const item = $(this).data("item");
+      showHistoryDetailModal(item);
+    });
+
+    function showHistoryDetailModal(item) {
+      // 生成参数文本（带换行）
+      const paramsText = `
+            <strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}<br>
+            <strong>分辨率：</strong>${item.params.size}<br>
+            <strong>长宽比：</strong>${item.params.aspect_ratio}<br>
+            <strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}
+        `;
+
+      // 输入图预览（如果有）
+      let inputHtml = "";
+      if (item.input_paths && item.input_paths.length > 0) {
+        inputHtml =
+          '<h5 class="mt-3">输入参考图：</h5><div class="d-flex flex-wrap gap-2">';
+        item.input_paths.forEach((url) => {
+          inputHtml += `<img src="${url}" style="width:50px;height:50px;object-fit:cover;">`;
+        });
+        inputHtml += "</div>";
+      }
+
+      // 结果图（主图）
+      const resultUrl = item.result_paths[0] || item.result_urls[0] || "";
+
+      const modalHtml = `
+            <div class="modal fade" id="historyDetailModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content bg-dark text-light">
+                        <div class="modal-header">
+                            <h5 class="modal-title">历史记录详情</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="text-center mb-3">
+                                <img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;">
+                            </div>
+                            <div>${paramsText}</div>
+                            ${inputHtml}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">
+                                删除
+                            </button>
+                            <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                                编辑
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+                            <button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                                使用参数
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+      // 插入并显示
+      $("#historyList").append(modalHtml);
+      const modal = new bootstrap.Modal(
+        document.getElementById("historyDetailModal"),
+      );
+      modal.show();
+
+      // 清理
+      $("#historyDetailModal").on("hidden.bs.modal", function () {
+        $(this).remove();
+      });
+    }
+
+    // 使用参数（复用原有逻辑）
+    $(document).on("click", "#useParamsBtn", function () {
+      const item = $(this).data("item");
+      // === 以下复用你原有的“使用参数”逻辑 ===
+      const params = item.params;
+
+      // 判断模式（Raw / Storyboard / Character）
+      let isCharacter = params.prompt.includes("面部特征保持一致");
+      let isStoryboard = params.prompt.includes("生成四格分镜");
+
+      if (isCharacter) {
+        $("#modeCharacter").prop("checked", true).trigger("change");
+        // 清空复选框
+        $("#characterSection input[type='checkbox']").prop("checked", false);
+        const prompt = params.prompt;
+        if (prompt.includes("正面全身")) $("#viewFront").prop("checked", true);
+        if (prompt.includes("侧面全身")) $("#viewSide").prop("checked", true);
+        if (prompt.includes("背面全身")) $("#viewBack").prop("checked", true);
+        if (prompt.includes("面部特写")) $("#viewFace").prop("checked", true);
+        if (prompt.includes("纯色背景"))
+          $("#viewSolidBg").prop("checked", true);
+
+        const notesMatch = prompt.match(/面部特征保持一致\。（.*?）?$/);
+        $("#characterNotes").val(notesMatch ? notesMatch[1] || "" : "");
+      } else if (isStoryboard) {
+        $("#modeStoryboard").prop("checked", true).trigger("change");
+        const lines = params.prompt.split("\n");
+        const preMatch = lines[0]?.match(/^(.+)，生成四格分镜/);
+        $("#prePrompt").val(preMatch ? preMatch[1] : "");
+        const styleMatch = lines[0]?.match(/生成四格分镜（(.+?)）/);
+        $("#style").val(styleMatch ? styleMatch[1] : "");
+        $("#shot1").val(lines[1]?.replace("分镜一：", "") || "");
+        $("#shot2").val(lines[2]?.replace("分镜二：", "") || "");
+        $("#shot3").val(lines[3]?.replace("分镜三：", "") || "");
+        $("#shot4").val(lines[4]?.replace("分镜四：", "") || "");
+      } else {
+        $("#modeRaw").prop("checked", true).trigger("change");
+        $("#promptRaw").val(params.prompt);
+      }
+
+      $("#resolution").val(params.size || "2K");
+      $("#aspectRatio").val(params.aspect_ratio || "auto");
+
+      // 恢复参考图
+      state.clear();
+      if (item.input_paths && item.input_paths.length > 0) {
+        state.setFromUrls(item.input_urls, item.input_paths);
+      }
+      if (typeof window.UploadModule?.renderPreview === "function") {
+        window.UploadModule.renderPreview();
+      }
+
+      updatePromptPreview();
+      $("html, body").animate({ scrollTop: 0 }, 300);
+
+      // 关闭浮窗
+      bootstrap.Modal.getInstance(
+        document.getElementById("historyDetailModal"),
+      )?.hide();
+    });
+
+    // 删除记录
+    $(document).on("click", "#deleteHistoryBtn", function () {
+      const recordId = $(this).data("id");
+      if (!confirm("确定要删除这条历史记录吗？")) return;
+
+      $.ajax({
+        url: `/history/${recordId}`,
+        method: "DELETE",
+        success: function (res) {
+          if (res.success) {
+            // 关闭浮窗
+            bootstrap.Modal.getInstance(
+              document.getElementById("historyDetailModal"),
+            )?.hide();
+            // 重新加载当前页
+            const currentPage =
+              parseInt(
+                $("#historyPagination .page-item.active .page-link").text(),
+              ) || 1;
+            loadHistoryPage(currentPage);
+          } else {
+            alert("删除失败: " + (res.error || "未知错误"));
+          }
+        },
+        error: function () {
+          alert("删除请求失败");
+        },
+      });
+    });
+
+    // 编辑按钮
+    $(document).on("click", "#editHistoryBtn", function () {
+      const item = $(this).data("item");
+
+      // 构造与拖拽逻辑一致的 item 结构：{ localPath, remoteUrl }
+      const editItem = {
+        localPath: item.result_paths?.[0] || item.result_urls?.[0], // 优先本地路径
+        remoteUrl: item.result_urls?.[0],
+      };
+
+      enterImageEditMode(editItem);
+
+      // 关闭浮窗
+      bootstrap.Modal.getInstance(
+        document.getElementById("historyDetailModal"),
+      )?.hide();
+    });
+
+    // document ready 结束
   });
 })();

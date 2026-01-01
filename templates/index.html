@@ -260,6 +260,20 @@
                                                     >分镜模式</label
                                                 >
                                             </div>
+                                            <div class="form-check">
+                                                <input
+                                                    class="form-check-input"
+                                                    type="radio"
+                                                    name="mode"
+                                                    id="modeCharacter"
+                                                    value="character"
+                                                />
+                                                <label
+                                                    class="form-check-label"
+                                                    for="modeCharacter"
+                                                    >角色模式</label
+                                                >
+                                            </div>
                                         </div>
 
                                         <div id="rawSection">
@@ -306,6 +320,94 @@
                                                 class="form-control"
                                                 placeholder="分镜四"
                                             ></textarea>
+                                        </div>
+                                        <div
+                                            id="characterSection"
+                                            style="display: none"
+                                        >
+                                            <div class="mb-3">
+                                                <label class="form-label"
+                                                    >角色视角（可多选）</label
+                                                >
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewFront"
+                                                        value="正面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewFront"
+                                                        >正面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewSide"
+                                                        value="侧面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewSide"
+                                                        >侧面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewBack"
+                                                        value="背面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewBack"
+                                                        >背面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewFace"
+                                                        value="面部特写"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewFace"
+                                                        >面部特写</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewSolidBg"
+                                                        value="纯色背景"
+                                                        checked
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewSolidBg"
+                                                        >纯色背景</label
+                                                    >
+                                                </div>
+                                            </div>
+
+                                            <div class="mb-3">
+                                                <label class="form-label"
+                                                    >其他说明（风格/姿态）</label
+                                                >
+                                                <textarea
+                                                    id="characterNotes"
+                                                    class="form-control"
+                                                    rows="2"
+                                                    placeholder="例如：日系二次元，站姿自然，表情温和..."
+                                                ></textarea>
+                                            </div>
                                         </div>
 
                                         <div class="mt-3">
@@ -368,25 +470,34 @@
                         role="tabpanel"
                         aria-labelledby="image-split-tab"
                     >
-                        <!-- 标题 + 工具栏 -->
+                        <!-- 在“图片编辑” Tab 的工具栏中 -->
                         <div
                             class="d-flex justify-content-between align-items-center mb-3"
                         >
                             <h5 class="mb-0">图片编辑</h5>
-                            <div>
+                            <div class="d-flex gap-2">
+                                <!-- 新增：裁剪模式选择 -->
+                                <select
+                                    id="cropMode"
+                                    class="form-select form-select-sm"
+                                    style="width: auto"
+                                >
+                                    <option value="quadrants">四格裁剪</option>
+                                    <option value="free">自由裁剪</option>
+                                </select>
                                 <button
                                     id="cropToQuadrantsBtn"
                                     class="btn btn-success btn-sm me-2"
                                     disabled
                                 >
-                                    四格切图
+                                    启用裁剪
                                 </button>
                                 <button
                                     id="saveCroppedImagesBtn"
                                     class="btn btn-primary btn-sm"
                                     disabled
                                 >
-                                    保存四格裁剪
+                                    保存裁剪结果
                                 </button>
                             </div>
                         </div>

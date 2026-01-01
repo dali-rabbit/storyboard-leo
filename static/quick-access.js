@@ -2,11 +2,16 @@
 window.QuickAccess = (function () {
   const STORAGE_KEY = "quickAccessImages";
   let images = [];
+  let currentFilter = "all"; // "all", "角色", "场景"
 
   function load() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       images = saved ? JSON.parse(saved) : [];
+      // 确保已有数据有默认标签
+      images.forEach((img) => {
+        if (!img.tag) img.tag = "全部";
+      });
     } catch (e) {
       images = [];
     }
@@ -16,27 +21,23 @@ window.QuickAccess = (function () {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(images));
   }
 
-  // 暴露给外部调用：添加图片（自动处理路径）
   async function addImage({ localPath, remoteUrl }) {
     console.log([localPath, remoteUrl]);
     if (!localPath && !remoteUrl) return;
 
-    // 去重（按 remoteUrl 或 localPath）
     const exists = images.some(
       (img) =>
         (img.remoteUrl === remoteUrl && remoteUrl) ||
         (img.localPath === localPath && localPath),
     );
     if (exists) return;
-    console.log([localPath, remoteUrl]);
 
     let usableLocal = localPath;
     let usableRemote = remoteUrl;
-    if (!usableRemote.startsWith("https://i.ibb.co")) {
+    if (usableRemote && !usableRemote.startsWith("https://i.ibb.co")) {
       usableRemote = null;
     }
 
-    // 情况1：只有本地路径 → 上传到 ImgBB
     if (usableLocal && !usableRemote) {
       try {
         const resp = await fetch(usableLocal);
@@ -50,7 +51,6 @@ window.QuickAccess = (function () {
         if (uploadRes.ok) {
           const data = await uploadRes.json();
           usableRemote = data.url;
-          // 更新 localPath 为标准化路径（以防相对路径问题）
           usableLocal = data.local_path || usableLocal;
         } else {
           alert("上传至快捷访问失败");
@@ -63,89 +63,163 @@ window.QuickAccess = (function () {
       }
     }
 
-    // 情况2：只有远程 URL 且是 imgbb → 保留
-    // 情况3：远程 URL 非 imgbb → 暂不支持（你可后续扩展）
-
     images.push({
       localPath: usableLocal,
       remoteUrl: usableRemote,
       addedAt: new Date().toISOString(),
+      tag: "全部", // 默认标签
     });
     save();
     renderSidebar();
   }
 
-  // 渲染侧边栏（仅在展开时显示图片）
+  function setTag(index, newTag) {
+    if (images[index]) {
+      images[index].tag = newTag;
+      save();
+      renderSidebar();
+    }
+  }
+
+  function removeImage(index) {
+    images.splice(index, 1);
+    save();
+    renderSidebar();
+  }
+
+  function setFilter(filter) {
+    currentFilter = filter;
+    renderSidebar();
+  }
+
   function renderSidebar() {
     const $sidebar = $("#quickSidebar");
-    if ($sidebar.hasClass("collapsed")) return;
-
-    const $container = $sidebar.find(".quick-images");
-    if ($container.length === 0) {
-      // 使用 flex 横向布局容器，并加间隙
-      const $div = $(`
-        <div class="quick-images mt-2 d-flex flex-wrap gap-2" style="justify-content: flex-start;"></div>
-      `);
-      $sidebar.append($div);
+    // 若侧边栏收起，清除内容（避免 DOM 残留）
+    if ($sidebar.hasClass("collapsed")) {
+      $sidebar.find(".quick-images").remove();
+      $sidebar.find(".quick-filter").remove();
+      return;
     }
 
+    // 渲染顶部过滤器
+    let $filter = $sidebar.find(".quick-filter");
+    if ($filter.length === 0) {
+      $filter = $(`
+        <div class="quick-filter d-flex gap-2 mb-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
+        </div>
+      `);
+      $sidebar.prepend($filter);
+
+      $filter.on("click", ".filter-btn", function () {
+        const filter = $(this).data("filter");
+        setFilter(filter);
+        $filter.find(".filter-btn").removeClass("active");
+        $(this).addClass("active");
+      });
+
+      // 初始化激活状态
+      $filter
+        .find(`.filter-btn[data-filter="${currentFilter}"]`)
+        .addClass("active");
+    }
+
+    // 渲染图片容器
+    let $container = $sidebar.find(".quick-images");
+    if ($container.length === 0) {
+      $container = $(`
+        <div class="quick-images mt-2 d-flex flex-wrap gap-2" style="justify-content: flex-start;"></div>
+      `);
+      $sidebar.append($container);
+    }
+
+    // 过滤图片
+    const filteredImages =
+      currentFilter === "all"
+        ? images
+        : images.filter((img) => img.tag === currentFilter);
+
     let html = "";
-    images.forEach((img, i) => {
+    filteredImages.forEach((img, i) => {
+      // 找回原始索引（用于操作）
+      const originalIndex = images.findIndex(
+        (item) =>
+          item.localPath === img.localPath && item.remoteUrl === img.remoteUrl,
+      );
+
       html += `
         <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
              style="width:100px;height:100px;cursor:pointer;" title="点击加入参考图">
           <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:cover;">
-          <button type="button" class="btn-remove btn btn-sm btn-danger position-absolute"
-                  style="top: -8px; right: -8px; width: 20px; height: 20px; padding: 0; font-size: 12px; line-height: 1;">
-            &times;
-          </button>
+          <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
+            <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">
+              ⋮
+            </button>
+            <ul class="dropdown-menu p-1" style="font-size:12px;">
+              <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="角色">角色</a></li>
+              <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="场景">场景</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
+            </ul>
+          </div>
         </div>
       `;
     });
-    $sidebar.find(".quick-images").html(html);
+    $container.html(html);
 
-    // 绑定“点击加入参考图”事件
-    $sidebar
-      .find(".quick-img-item")
-      .off("click")
-      .on("click", function (e) {
-        if ($(e.target).hasClass("btn-remove")) return;
-
-        const index = $(this).index();
-        const img = images[index];
-        if (!img) return;
-
-        const success = window.AIImageState?.addFromQuickAccess(
+    // 重新绑定事件（使用事件委托）
+    $container.off("click").on("click", ".quick-img-item", function (e) {
+      if ($(e.target).closest(".dropdown").length) return;
+      const $item = $(this);
+      const $img = $item.find("img");
+      const src = $img.attr("src");
+      const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
+      if (img && window.AIImageState?.addFromQuickAccess) {
+        const success = window.AIImageState.addFromQuickAccess(
           img.localPath,
           img.remoteUrl,
         );
-        if (!success) {
-          // 可选：提示用户（比如已达上限或已存在）
-          // 例如：Bootstrap Toast 或 alert
-          // alert("无法添加：已达10张上限或图片已存在");
-        } else {
-          // 刷新上传预览区
-          if (window.UploadModule?.renderPreview) {
-            window.UploadModule.renderPreview();
-          }
+        if (success && window.UploadModule?.renderPreview) {
+          window.UploadModule.renderPreview();
         }
+      }
+    });
+
+    // 标签设置
+    $container
+      .off("click", ".quick-tag-btn")
+      .on("click", ".quick-tag-btn", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = $(this).data("index");
+        const tag = $(this).data("tag");
+        setTag(index, tag);
       });
 
-    // 绑定“删除”事件
-    $sidebar
-      .find(".btn-remove")
-      .off("click")
-      .on("click", function (e) {
+    // 删除
+    $container
+      .off("click", ".quick-delete-btn")
+      .on("click", ".quick-delete-btn", function (e) {
+        e.preventDefault();
         e.stopPropagation();
-        const $item = $(this).closest(".quick-img-item");
-        const index = $item.index();
-        images.splice(index, 1);
-        save();
-        renderSidebar(); // 重新渲染
+        const index = $(this).data("index");
+        removeImage(index);
       });
+
+    // 初始化 Bootstrap dropdown（如果未自动初始化）
+    if (typeof bootstrap !== "undefined" && bootstrap.Dropdown) {
+      $container.find('[data-bs-toggle="dropdown"]').each(function () {
+        new bootstrap.Dropdown(this);
+      });
+    }
   }
 
-  // 初始化
   load();
-  return { addImage, renderSidebar, getImages: () => [...images] };
+  return {
+    addImage,
+    renderSidebar,
+    getImages: () => [...images],
+  };
 })();

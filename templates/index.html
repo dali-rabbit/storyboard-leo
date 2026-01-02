@@ -547,7 +547,105 @@
                         role="tabpanel"
                         aria-labelledby="storyboard-tab"
                     >
-                        <p>故事板功能开发中...</p>
+                        <!-- 顶部工具栏 -->
+                        <div
+                            class="d-flex justify-content-between align-items-center mb-3"
+                        >
+                            <div class="d-flex align-items-center gap-2 mb-0">
+                                <!-- 可编辑标题 -->
+                                <div
+                                    class="storyboard-title-container d-flex align-items-center"
+                                >
+                                    <div
+                                        class="storyboard-title-display d-flex align-items-center"
+                                    >
+                                        <span id="storyboardTitleText"
+                                            >未命名故事板</span
+                                        >
+                                        <button
+                                            id="editTitleBtn"
+                                            class="btn btn-link text-light p-0 ms-2"
+                                            style="
+                                                font-size: 0.9em;
+                                                opacity: 0.6;
+                                            "
+                                            title="重命名"
+                                        >
+                                            ✏️
+                                        </button>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="storyboardTitleInput"
+                                        class="form-control form-control-sm d-none"
+                                        value="未命名故事板"
+                                        style="
+                                            width: auto;
+                                            min-width: 120px;
+                                            display: inline-block;
+                                        "
+                                    />
+                                </div>
+                                <!-- 下拉按钮 -->
+                                <div class="dropdown">
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        type="button"
+                                        id="storyboardDropdownBtn"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        style="padding: 0.25rem 0.5rem"
+                                    >
+                                        ▼
+                                    </button>
+                                    <ul
+                                        class="dropdown-menu dropdown-menu-end"
+                                        aria-labelledby="storyboardDropdownBtn"
+                                        id="storyboardDropdownMenu"
+                                    >
+                                        <li>
+                                            <a
+                                                class="dropdown-item"
+                                                href="#"
+                                                data-action="new"
+                                                >🆕 新建故事板</a
+                                            >
+                                        </li>
+                                        <li><hr class="dropdown-divider" /></li>
+                                        <!-- 动态故事板列表将插入到这里 -->
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button
+                                    id="addStoryboardPanelBtn"
+                                    class="btn btn-outline-info btn-sm"
+                                >
+                                    + 添加分镜
+                                </button>
+                                <button
+                                    id="saveStoryboardBtn"
+                                    class="btn btn-primary btn-sm"
+                                    disabled
+                                >
+                                    保存
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 拖入提示 / 面板容器（不变） -->
+                        <div
+                            id="storyboardPlaceholder"
+                            class="d-flex justify-content-center align-items-center text-muted py-5"
+                            style="min-height: 300px"
+                        >
+                            🎞️ 拖入图片开始创建故事板，或从下拉菜单选择故事板
+                        </div>
+                        <div
+                            id="storyboardPanels"
+                            class="row g-3"
+                            style="display: none"
+                        ></div>
                     </div>
                 </div>
             </div>
@@ -628,6 +726,7 @@
         <script src="{{ url_for('static', filename='upload.js') }}"></script>
         <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
         <script src="{{ url_for('static', filename='image-edit.js') }}"></script>
+        <script src="{{ url_for('static', filename='storyboard.js') }}"></script>
         <script src="{{ url_for('static', filename='main.js') }}"></script>
     </body>
 </html>

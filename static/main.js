@@ -353,6 +353,9 @@
         window.QuickAccess?.addImage(item);
       } else if (item && target == "edit") {
         enterImageEditMode(item);
+      } else if (item && target === "storyboard") {
+        // 单图：直接进入故事板
+        enterStoryboardMode([item]);
       }
 
       cleanupDragState();
@@ -408,7 +411,7 @@
                         </div>
                         <div class="modal-body">
                             <div class="text-center mb-3">
-                                <img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;">
+                              <a href="${resultUrl}" data-lightbox="history-detail"><img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;"></a>
                             </div>
                             <div>${paramsText}</div>
                             ${inputHtml}

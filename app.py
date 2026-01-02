@@ -409,66 +409,107 @@ def delete_history_record(record_id):
         return jsonify({"error": "Delete failed"}), 500
 
 
+# @app.route("/swap_face", methods=["POST"])
+# def swap_face():
+#     """
+#     使用 generate_via_image_fallback 实现换脸：图1为被替换图像，图2为人脸源图像。
+#     """
+#     global is_generating
+#     if current_task_lock.locked():
+#         return jsonify({"error": "Another task is running. Please wait."}), 429
+
+#     with current_task_lock:
+#         try:
+#             data = request.get_json()
+#             source_url = data.get("source_url", "").strip()  # 图1：被换脸的图
+#             face_url = data.get("face_url", "").strip()  # 图2：提供人脸的图
+
+#             if not source_url or not face_url:
+#                 return jsonify({"error": "Missing source_url or face_url"}), 400
+
+#             # 构造输入图片顺序：[图1, 图2]
+#             image_urls = [source_url, face_url]
+
+#             # 精炼提示词：明确指令 + 保持其他不变
+#             prompt = "我需要执行一个换脸任务，target image是图1，face image是图2"
+
+#             # 使用现有生成逻辑（auto 长宽比，2K 尺寸）
+#             result_urls = generate_via_image_fallback(
+#                 image_urls=image_urls,
+#                 prompt=prompt,
+#                 size="2K",
+#                 ar="auto",
+#                 fallback_order=["nano_banana", "rh_official"],
+#             )
+
+#             if not result_urls:
+#                 return jsonify(
+#                     {"error": "All APIs failed to generate swapped image"}
+#                 ), 500
+
+#             # 保存结果到本地
+#             local_result_paths = []
+#             for url in result_urls:
+#                 local_path = save_image_from_url(url, RESULTS_DIR)
+#                 if local_path:
+#                     local_result_paths.append("/" + local_path.replace("\\", "/"))
+
+#             if not local_result_paths:
+#                 return jsonify({"error": "Failed to save result images locally"}), 500
+
+#             # 返回第一个结果（通常只有一个）
+#             return jsonify(
+#                 {
+#                     "success": True,
+#                     "result_url": result_urls[0],  # 原始外部 URL
+#                     "local_path": local_result_paths[0],  # 本地路径供前端显示
+#                 }
+#             )
+
+#         except Exception as e:
+#             print(f"[Swap Face Error] {e}")
+#             return jsonify({"error": f"换脸失败: {str(e)}"}), 500
+
+
 @app.route("/swap_face", methods=["POST"])
 def swap_face():
     """
-    使用 generate_via_image_fallback 实现换脸：图1为被替换图像，图2为人脸源图像。
+    调用配置的换脸插件（如 replicate_swap），执行真实换脸。
     """
-    global is_generating
-    if current_task_lock.locked():
-        return jsonify({"error": "Another task is running. Please wait."}), 429
+    try:
+        data = request.get_json()
+        source_url = data.get("source_url", "").strip()
+        face_url = data.get("face_url", "").strip()
 
-    with current_task_lock:
-        try:
-            data = request.get_json()
-            source_url = data.get("source_url", "").strip()  # 图1：被换脸的图
-            face_url = data.get("face_url", "").strip()  # 图2：提供人脸的图
+        if not source_url or not face_url:
+            return jsonify({"error": "Missing source_url or face_url"}), 400
 
-            if not source_url or not face_url:
-                return jsonify({"error": "Missing source_url or face_url"}), 400
-
-            # 构造输入图片顺序：[图1, 图2]
-            image_urls = [source_url, face_url]
-
-            # 精炼提示词：明确指令 + 保持其他不变
-            prompt = "我需要执行一个换脸任务，target image是图1，face image是图2"
-
-            # 使用现有生成逻辑（auto 长宽比，2K 尺寸）
-            result_urls = generate_via_image_fallback(
-                image_urls=image_urls,
-                prompt=prompt,
-                size="2K",
-                ar="auto",
-                fallback_order=["nano_banana", "rh_official"],
-            )
-
-            if not result_urls:
-                return jsonify(
-                    {"error": "All APIs failed to generate swapped image"}
-                ), 500
-
-            # 保存结果到本地
-            local_result_paths = []
-            for url in result_urls:
-                local_path = save_image_from_url(url, RESULTS_DIR)
-                if local_path:
-                    local_result_paths.append("/" + local_path.replace("\\", "/"))
-
-            if not local_result_paths:
-                return jsonify({"error": "Failed to save result images locally"}), 500
-
-            # 返回第一个结果（通常只有一个）
+        # 获取换脸插件函数
+        swap_func = get_face_swap_plugin()
+        if swap_func is None:
             return jsonify(
-                {
-                    "success": True,
-                    "result_url": result_urls[0],  # 原始外部 URL
-                    "local_path": local_result_paths[0],  # 本地路径供前端显示
-                }
-            )
+                {"error": "Face swap plugin not configured or unavailable"}
+            ), 500
 
-        except Exception as e:
-            print(f"[Swap Face Error] {e}")
-            return jsonify({"error": f"换脸失败: {str(e)}"}), 500
+        # 调用插件执行换脸
+        result_url = swap_func(source_image_url=source_url, face_image_url=face_url)
+
+        # 保存结果到本地（统一管理）
+        local_path = save_image_from_url(result_url, RESULTS_DIR)
+        if not local_path:
+            return jsonify({"error": "Failed to save swapped image locally"}), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "result_url": result_url,  # 外部 URL（调试用）
+                "local_path": "/" + local_path.replace("\\", "/"),  # 前端展示用
+            }
+        )
+
+    except Exception as e:
+        print(f"[Swap Face Error] {e}")
+        return jsonify({"error": f"换脸失败: {str(e)}"}), 500
 
 
 @app.route("/dummy_swap_face", methods=["POST"])
@@ -495,6 +536,86 @@ def dummy_swap_face():
     except Exception as e:
         print(f"[Swap Face Error] {e}")
         return jsonify({"error": "换脸失败"}), 500
+
+
+# 确保目录存在
+STORYBOARD_DIR = os.path.join(os.path.dirname(__file__), "storyboards")
+os.makedirs(STORYBOARD_DIR, exist_ok=True)
+
+
+@app.route("/save-storyboard", methods=["POST"])
+def save_storyboard():
+    data = request.json
+    if "panels" not in data:
+        return jsonify({"success": False, "error": "无效数据"})
+
+    title = ""
+    if "title" in data:
+        title = data["title"]
+    record_id = None
+    if "id" in data:
+        record_id = data["id"]
+
+    # 验证 panels 结构
+    for panel in data["panels"]:
+        if not isinstance(panel.get("images"), list):
+            return jsonify({"success": False, "error": "images 必须是数组"})
+        for url in panel["images"]:
+            if not isinstance(url, str) or not url.strip():
+                return jsonify({"success": False, "error": "图片引用必须是有效字符串"})
+
+    # 如不存在输入id，则为新record生成唯一 ID
+    if not record_id:
+        record_id = (
+            f"sb_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        )
+
+    record = {
+        "title": title,
+        "id": record_id,
+        "type": "storyboard",
+        "timestamp": datetime.utcnow().isoformat(),
+        "panels": data["panels"],  # 仅保存引用路径
+    }
+
+    # 保存为单个 JSON 文件
+    filepath = os.path.join(STORYBOARD_DIR, f"{record_id}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True, "record_id": record_id})
+
+
+@app.route("/list-storyboards", methods=["GET"])
+def list_storyboards():
+    files = []
+    for f in os.listdir(STORYBOARD_DIR):
+        if f.endswith(".json"):
+            with open(os.path.join(STORYBOARD_DIR, f), "r", encoding="utf-8") as fp:
+                try:
+                    data = json.load(fp)
+                    files.append(
+                        {
+                            "id": data.get("id"),
+                            "title": data.get("title", "未命名故事板"),
+                            "timestamp": data.get("timestamp"),
+                        }
+                    )
+                except:
+                    continue
+    # 按时间倒序
+    files.sort(key=lambda x: x["timestamp"], reverse=True)
+    return jsonify(files)
+
+
+@app.route("/load-storyboard/<id>", methods=["GET"])
+def load_storyboard(id):
+    filepath = os.path.join(STORYBOARD_DIR, f"{id}.json")
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Not found"}), 404
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 // state.js
 
 // 全局提示函数
-function showToast(message, type = "info") {
+function showToast(message, type = "info", delay = 0) {
   // type: 'success', 'error', 'warning', 'info'
   const colors = {
     success: "green",
@@ -27,9 +27,18 @@ function showToast(message, type = "info") {
   container.insertAdjacentHTML("beforeend", toastHtml);
 
   const toastEl = document.getElementById(toastId);
-  const toast = new bootstrap.Toast(toastEl, {
-    autohide: false,
-  });
+  let toast = null;
+  if (delay == 0) {
+    toast = new bootstrap.Toast(toastEl, {
+      autohide: false,
+    });
+  } else if (delay > 0) {
+    toast = new bootstrap.Toast(toastEl, {
+      autohide: true,
+      delay: delay,
+    });
+  }
+
   toast.show();
 
   // 自动清理已隐藏的 toast

@@ -302,3 +302,55 @@ body {
 .quick-sidebar .quick-filter {
     padding-top: 10px;
 }
+
+/* main.css */
+#storyboardTitleInput {
+    background: transparent;
+    border: 1px solid var(--bs-primary);
+    color: var(--bs-body-color);
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+#storyboardTitleText {
+    font-size: 1.25rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.panel-images {
+    width: 100%;
+    aspect-ratio: auto; /* 默认 auto，由 JS 动态覆盖 */
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.panel-image-stack {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 4px;
+}
+.panel-image-stack-link:nth-child(2) {
+    transform: translate(15px, 15px);
+}
+.panel-image-stack-link:nth-child(2):hover {
+    z-index: 999;
+}
+.panel-image-stack-link:nth-child(3) {
+    transform: translate(30px, 30px);
+}
+.panel-image-stack-link:nth-child(3):hover {
+    z-index: 999;
+}
+.panel-image-stack-link:nth-child(4) {
+    transform: translate(45px, 45px);
+}
+.panel-image-stack-link:nth-child(4):hover {
+    z-index: 999;
+}
+/* 更多可继续 */

@@ -52,7 +52,7 @@ window.addEventListener("resize", resizeCanvas);
 img.onload = function () {
   cropState.imgWidth = img.naturalWidth;
   cropState.imgHeight = img.naturalHeight;
-  cropState.enabled = false;
+  // cropState.enabled = false;
   resizeCanvas();
   render();
 
@@ -60,6 +60,7 @@ img.onload = function () {
     .removeClass("d-flex") // 移除 display: flex
     .hide(); // 此时 hide 有效
   $("#cropToQuadrantsBtn").prop("disabled", false);
+  $("#swapFaceBtn").prop("disabled", false);
   // 在 image-edit.js 顶部或 onload 后
   document.getElementById("cropMode").value = "quadrants";
 };
@@ -543,3 +544,160 @@ document
       alert("保存裁剪结果失败，请重试。");
     }
   });
+
+// ===== 换脸功能 =====
+document.getElementById("swapFaceBtn").addEventListener("click", async () => {
+  // 1. 获取 QuickAccess 中标签为“角色”的图片
+  const quickImages = window.QuickAccess?.getImages() || [];
+  const characterImages = quickImages.filter((img) => img.tag === "角色");
+
+  if (characterImages.length === 0) {
+    alert("暂无标记为“角色”的参考面部图片，请先在快捷访问中标记。");
+    return;
+  }
+
+  // 2. 构建选择模态框
+  let listHtml = "";
+  characterImages.forEach((img, idx) => {
+    const previewSrc = img.localPath || img.remoteUrl;
+    const title = img.title
+      ? `<div class="text-center small mt-1">${img.title}</div>`
+      : "";
+    listHtml += `
+      <div class="col-4 mb-3 text-center" style="cursor:pointer;" data-index="${idx}">
+        <img src="${previewSrc}" class="rounded" style="width:80px;height:80px;object-fit:cover;">
+        ${title}
+      </div>
+    `;
+  });
+
+  const modalHtml = `
+    <div class="modal fade" id="swapFaceModal" tabindex="-1">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header">
+            <h5 class="modal-title">选择参考面部</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="row">${listHtml}</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" id="confirmSwapFace" disabled>确认换脸</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML("beforeend", modalHtml);
+  const modalEl = document.getElementById("swapFaceModal");
+  const modal = new bootstrap.Modal(modalEl);
+  let selectedIdx = null;
+
+  // 选中逻辑
+  modalEl.querySelectorAll(".col-4").forEach((el) => {
+    el.addEventListener("click", () => {
+      modalEl
+        .querySelectorAll(".col-4")
+        .forEach((e) => e.classList.remove("border", "border-success"));
+      el.classList.add("border", "border-success");
+      selectedIdx = parseInt(el.dataset.index, 10);
+      document.getElementById("confirmSwapFace").disabled = false;
+    });
+  });
+
+  // 确认换脸
+  document
+    .getElementById("confirmSwapFace")
+    .addEventListener("click", async () => {
+      if (selectedIdx === null) return;
+
+      // 显示全屏遮罩
+      modal.hide();
+      document.getElementById("fullscreenMask").style.display = "block";
+      document.getElementById("fullscreenMask").classList.remove("d-none");
+
+      const faceImg = characterImages[selectedIdx];
+      const faceUrl = faceImg.remoteUrl; // 必须有 remoteUrl（QuickAccess 已保证）
+
+      // 3. 将当前 canvas 图像上传到 ImgBB
+      // 3. 将原始图像（而非 Canvas）上传到 ImgBB
+      let originalBlob;
+      try {
+        // img.src 可能是 URL 或 blob URL
+        const response = await fetch(img.src);
+        if (!response.ok) {
+          throw new Error(
+            `Failed to fetch original image: ${response.statusText}`,
+          );
+        }
+        originalBlob = await response.blob();
+      } catch (err) {
+        console.error("无法获取原始图像用于上传:", err);
+        alert("无法读取原始图像，请确保图片已正确加载。");
+        document.getElementById("fullscreenMask").style.display = "none";
+        document.getElementById("fullscreenMask").classList.add("d-none");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", originalBlob, "original_for_swap.jpg");
+
+      const uploadResp = await fetch("/quick-upload", {
+        method: "POST",
+        body: formData,
+      });
+      if (!uploadResp.ok) {
+        alert("上传当前图像失败，请重试。");
+        document.getElementById("fullscreenMask").style.display = "none";
+        document.getElementById("fullscreenMask").classList.add("d-none");
+        return;
+      }
+      const uploadData = await uploadResp.json();
+      const sourceUrl = uploadData.url; // canvas 图的 ImgBB URL
+
+      // 4. 调用换脸接口（你已提供伪接口）
+      const swapResp = await fetch("/swap_face", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_url: sourceUrl, face_url: faceUrl }),
+      });
+
+      const swapData = await swapResp.json();
+      if (!swapData.success) {
+        showToast("换脸失败：" + (e.message || "未知错误"), "error");
+        document.getElementById("fullscreenMask").style.display = "none";
+        document.getElementById("fullscreenMask").classList.add("d-none");
+        return;
+      }
+
+      // 5. 加载返回的占位图（或真实结果）到 canvas
+      const swappedImg = new Image();
+      swappedImg.onload = () => {
+        console.log("换脸成功");
+        // 重置 crop 状态
+        cropState.imgWidth = swappedImg.naturalWidth;
+        cropState.imgHeight = swappedImg.naturalHeight;
+        cropState.enabled = true;
+        cropState.mode = "free";
+        cropState.free = { x: 0, y: 0, width: 1, height: 1 }; // 整图
+        img.src = swappedImg.src; // 更新主图（触发 onload）
+
+        // 全局提示
+        showToast("换脸成功，可以使用保存按钮保存", "success");
+        // 隐藏遮罩
+        document.getElementById("fullscreenMask").style.display = "none";
+        document.getElementById("fullscreenMask").classList.add("d-none");
+      };
+      swappedImg.src = swapData.result_url; // 占位图 URL
+    });
+  // 启用保存按钮
+  document.getElementById("saveCroppedImagesBtn").disabled = false;
+
+  modalEl.addEventListener("hidden.bs.modal", () => {
+    modalEl.remove();
+  });
+  modal.show();
+});

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from PIL import Image
 
-# 导入你的生成函数
+from plugins import get_face_swap_plugin
 from test_gen_api import generate_via_image_fallback
 
 load_dotenv()
@@ -185,7 +185,7 @@ def generate():
                 prompt=prompt,
                 size=size,
                 ar=aspect_ratio,
-                fallback_order=["nano_banana", "rh_third", "rh_official"],
+                fallback_order=["nano_banana", "rh_official"],
             )
         except Exception as e:
             return jsonify({"error": f"Generation failed: {str(e)}"}), 500
@@ -390,7 +390,6 @@ def delete_history_record(record_id):
             record = json.load(fp)
 
         all_local_paths = []
-        all_local_paths.extend(record.get("local_input_paths", []))
         all_local_paths.extend(record.get("local_result_paths", []))
 
         # 3. 删除 JSON 文件
@@ -408,6 +407,94 @@ def delete_history_record(record_id):
     except Exception as e:
         print(f"[Delete Error] {e}")
         return jsonify({"error": "Delete failed"}), 500
+
+
+@app.route("/swap_face", methods=["POST"])
+def swap_face():
+    """
+    使用 generate_via_image_fallback 实现换脸：图1为被替换图像，图2为人脸源图像。
+    """
+    global is_generating
+    if current_task_lock.locked():
+        return jsonify({"error": "Another task is running. Please wait."}), 429
+
+    with current_task_lock:
+        try:
+            data = request.get_json()
+            source_url = data.get("source_url", "").strip()  # 图1：被换脸的图
+            face_url = data.get("face_url", "").strip()  # 图2：提供人脸的图
+
+            if not source_url or not face_url:
+                return jsonify({"error": "Missing source_url or face_url"}), 400
+
+            # 构造输入图片顺序：[图1, 图2]
+            image_urls = [source_url, face_url]
+
+            # 精炼提示词：明确指令 + 保持其他不变
+            prompt = "我需要执行一个换脸任务，target image是图1，face image是图2"
+
+            # 使用现有生成逻辑（auto 长宽比，2K 尺寸）
+            result_urls = generate_via_image_fallback(
+                image_urls=image_urls,
+                prompt=prompt,
+                size="2K",
+                ar="auto",
+                fallback_order=["nano_banana", "rh_official"],
+            )
+
+            if not result_urls:
+                return jsonify(
+                    {"error": "All APIs failed to generate swapped image"}
+                ), 500
+
+            # 保存结果到本地
+            local_result_paths = []
+            for url in result_urls:
+                local_path = save_image_from_url(url, RESULTS_DIR)
+                if local_path:
+                    local_result_paths.append("/" + local_path.replace("\\", "/"))
+
+            if not local_result_paths:
+                return jsonify({"error": "Failed to save result images locally"}), 500
+
+            # 返回第一个结果（通常只有一个）
+            return jsonify(
+                {
+                    "success": True,
+                    "result_url": result_urls[0],  # 原始外部 URL
+                    "local_path": local_result_paths[0],  # 本地路径供前端显示
+                }
+            )
+
+        except Exception as e:
+            print(f"[Swap Face Error] {e}")
+            return jsonify({"error": f"换脸失败: {str(e)}"}), 500
+
+
+@app.route("/dummy_swap_face", methods=["POST"])
+def dummy_swap_face():
+    """
+    伪换脸接口：接收 source_url 和 face_url，返回一个占位结果图
+    """
+    try:
+        data = request.get_json()
+        source_url = data.get("source_url")
+        face_url = data.get("face_url")
+
+        if not source_url or not face_url:
+            return jsonify({"error": "Missing source_url or face_url"}), 400
+
+        # ✅ 伪逻辑：返回一个固定占位图（可替换为真实换脸）
+        result_url = "https://placehold.co/1280x800?text=FACE"
+
+        # （可选）未来替换为真实换脸：
+        # result_url = real_face_swap(source_url, face_url)
+
+        return jsonify({"success": True, "result_url": result_url})
+
+    except Exception as e:
+        print(f"[Swap Face Error] {e}")
+        return jsonify({"error": "换脸失败"}), 500
 
 
 if __name__ == "__main__":

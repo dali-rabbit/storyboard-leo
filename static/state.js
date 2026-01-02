@@ -1,4 +1,43 @@
 // state.js
+
+// 全局提示函数
+function showToast(message, type = "info") {
+  // type: 'success', 'error', 'warning', 'info'
+  const colors = {
+    success: "green",
+    error: "red",
+    warning: "orange",
+    info: "blue",
+  };
+  const bgColor = colors[type] || "blue";
+
+  const toastId = "toast-" + Date.now();
+  const toastHtml = `
+    <div id="${toastId}" class="toast align-items-center text-white border-0 mb-2" role="alert" style="background-color: ${bgColor}; min-width: 250px; pointer-events: auto;">
+      <div class="d-flex">
+        <div class="toast-body">
+          ${message}
+        </div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  `;
+
+  const container = document.getElementById("globalToastContainer");
+  container.insertAdjacentHTML("beforeend", toastHtml);
+
+  const toastEl = document.getElementById(toastId);
+  const toast = new bootstrap.Toast(toastEl, {
+    autohide: false,
+  });
+  toast.show();
+
+  // 自动清理已隐藏的 toast
+  toastEl.addEventListener("hidden.bs.toast", () => {
+    toastEl.remove();
+  });
+}
+
 window.AIImageState = (function () {
   let uploadedImageUrls = [];
   let uploadedLocalPaths = [];

@@ -283,11 +283,22 @@ body {
 
 #quickSidebar .quick-images {
     max-width: 100%;
-    overflow-x: auto;
+    /*overflow-x: auto;*/
     padding: 10px;
 }
 
 .highlight-new {
     background-color: #ffeb3b !important;
     transition: background-color 1.5s ease;
+}
+
+.quick-img-title {
+    max-height: 3em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.quick-sidebar .quick-filter {
+    padding-top: 10px;
 }

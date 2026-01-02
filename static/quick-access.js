@@ -8,9 +8,9 @@ window.QuickAccess = (function () {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       images = saved ? JSON.parse(saved) : [];
-      // 确保已有数据有默认标签
       images.forEach((img) => {
         if (!img.tag) img.tag = "全部";
+        if (!img.title) img.title = ""; // ← 新增：默认无标题
       });
     } catch (e) {
       images = [];
@@ -67,10 +67,19 @@ window.QuickAccess = (function () {
       localPath: usableLocal,
       remoteUrl: usableRemote,
       addedAt: new Date().toISOString(),
-      tag: "全部", // 默认标签
+      tag: "全部",
+      title: "", // ← 新增
     });
     save();
     renderSidebar();
+  }
+
+  function setTitle(index, newTitle) {
+    if (images[index]) {
+      images[index].title = (newTitle || "").trim();
+      save();
+      renderSidebar();
+    }
   }
 
   function setTag(index, newTag) {
@@ -111,7 +120,7 @@ window.QuickAccess = (function () {
           <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
         </div>
       `);
-      $sidebar.prepend($filter);
+      $sidebar.append($filter);
 
       $filter.on("click", ".filter-btn", function () {
         const filter = $(this).data("filter");
@@ -143,16 +152,21 @@ window.QuickAccess = (function () {
 
     let html = "";
     filteredImages.forEach((img, i) => {
-      // 找回原始索引（用于操作）
       const originalIndex = images.findIndex(
         (item) =>
           item.localPath === img.localPath && item.remoteUrl === img.remoteUrl,
       );
 
+      // 标题显示（有标题才显示文字）
+      const titleDisplay = img.title
+        ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${img.title}</div>`
+        : "";
+
       html += `
         <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
-             style="width:100px;height:100px;cursor:pointer;" title="点击加入参考图">
+             style="width:100px;height:100px;cursor:pointer;" title="${img.title || "点击加入参考图"}">
           <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:cover;">
+          ${titleDisplay}
           <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
             <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">
               ⋮
@@ -161,12 +175,14 @@ window.QuickAccess = (function () {
               <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="角色">角色</a></li>
               <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="场景">场景</a></li>
               <li><hr class="dropdown-divider"></li>
+              <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">设置标题</a></li>
               <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
             </ul>
           </div>
         </div>
       `;
     });
+
     $container.html(html);
 
     // 重新绑定事件（使用事件委托）
@@ -196,6 +212,21 @@ window.QuickAccess = (function () {
         const index = $(this).data("index");
         const tag = $(this).data("tag");
         setTag(index, tag);
+      });
+
+    // 设置标题
+    $container
+      .off("click", ".quick-title-btn")
+      .on("click", ".quick-title-btn", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = $(this).data("index");
+        const currentTitle = images[index]?.title || "";
+        const newTitle = prompt("请输入图片标题：", currentTitle);
+        if (newTitle !== null) {
+          // 用户点击“取消”返回 null，不保存
+          setTitle(index, newTitle);
+        }
       });
 
     // 删除

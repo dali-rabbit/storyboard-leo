@@ -165,7 +165,7 @@ window.QuickAccess = (function () {
       html += `
         <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
              style="width:100px;height:100px;cursor:pointer;" title="${img.title || "点击加入参考图"}">
-          <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:cover;">
+          <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
           ${titleDisplay}
           <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
             <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">
@@ -188,12 +188,34 @@ window.QuickAccess = (function () {
     // 重新绑定事件（使用事件委托）
     $container.off("click").on("click", ".quick-img-item", function (e) {
       if ($(e.target).closest(".dropdown").length) return;
-      const $item = $(this);
-      const $img = $item.find("img");
+
+      const $img = $(this).find("img");
       const src = $img.attr("src");
       const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
-      if (img && window.AIImageState?.addFromQuickAccess) {
-        const success = window.AIImageState.addFromQuickAccess(
+
+      if (!img) return;
+
+      // 构造 fake item，兼容 showHistoryDetailModal
+      const fakeItem = {
+        id: "quick-" + Date.now(), // 无真实 ID，但用于唯一标识
+        result_paths: [img.localPath || ""],
+        result_urls: [img.remoteUrl || ""],
+        input_paths: [],
+        input_urls: [],
+        timestamp: img.addedAt || new Date().toISOString(),
+        params: {
+          prompt: "(来自快捷访问)",
+          size: "2K",
+          aspect_ratio: "auto",
+        },
+      };
+
+      // 调用全局模态框函数（需确保此函数在 window 作用域或可访问）
+      if (typeof window.showHistoryDetailModal === "function") {
+        window.showHistoryDetailModal(fakeItem);
+      } else {
+        // 兜底：直接加参考图（兼容旧版）
+        const success = window.AIImageState?.addFromQuickAccess(
           img.localPath,
           img.remoteUrl,
         );
@@ -202,6 +224,53 @@ window.QuickAccess = (function () {
         }
       }
     });
+
+    $container
+      .off("dragstart")
+      .on("dragstart", ".quick-img-item img", function (e) {
+        const $img = $(this);
+        const src = $img.attr("src");
+        const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
+        if (!img) return;
+
+        const itemData = {
+          localPath: img.localPath,
+          remoteUrl: img.remoteUrl,
+        };
+        window.__draggedItem = itemData;
+        window.__dragOrigin = "quick"; // 标记来源是快捷栏
+
+        const originalEvent = e.originalEvent;
+        const ghost = this.cloneNode(true);
+        ghost.style.width = "80px";
+        ghost.style.height = "80px";
+        ghost.style.opacity = "0.9";
+        ghost.style.borderRadius = "4px";
+        ghost.style.objectFit = "cover";
+        ghost.style.pointerEvents = "none";
+        const ghostDiv = document.createElement("div");
+        ghostDiv.appendChild(ghost);
+        ghostDiv.style.position = "absolute";
+        ghostDiv.style.top = "-9999px";
+        document.body.appendChild(ghostDiv);
+
+        originalEvent.dataTransfer.setDragImage(ghostDiv, 40, 40);
+
+        const cleanup = () => {
+          if (ghostDiv.parentNode) ghostDiv.parentNode.removeChild(ghostDiv);
+          document.removeEventListener("dragend", cleanup);
+        };
+        document.addEventListener("dragend", cleanup);
+
+        // 延迟显示拖拽目标，但排除“快捷访问”区域
+        setTimeout(() => {
+          $("#dragTargetOverlay").show();
+          // 隐藏快捷访问目标图标（如果是从快捷栏拖出）
+          if (window.__dragOrigin === "quick") {
+            $(`.drag-target-item[data-target="quick"]`).hide();
+          }
+        }, 100);
+      });
 
     // 标签设置
     $container

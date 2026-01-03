@@ -369,6 +369,9 @@
     function cleanupDragState() {
       isDraggingFromValidSource = false;
       window.__draggedItem = null;
+      window.__dragOrigin = null; // ← 新增
+      // 隐藏所有目标区域（包括重新显示快捷访问图标）
+      $(".drag-target-item[data-target='quick']").show(); // ← 恢复显示
       $("#dragTargetOverlay").hide();
     }
 
@@ -379,6 +382,21 @@
     });
 
     function showHistoryDetailModal(item) {
+      const isFromQuick = item.id?.startsWith("quick-");
+      // 在 modalHtml 的 footer 中，按条件隐藏按钮：
+      const deleteBtn = isFromQuick
+        ? ""
+        : `
+        <button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">
+          删除
+        </button>
+      `;
+
+      const useParamsBtn = `
+        <button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+          复刻
+        </button>
+      `;
       // 生成参数文本（带换行）
       const paramsText = `
             <strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}<br>
@@ -401,37 +419,49 @@
       // 结果图（主图）
       const resultUrl = item.result_paths[0] || item.result_urls[0] || "";
 
+      // 判断是否应隐藏“复刻”按钮
+      const hideUseParams =
+        item.params.prompt === "free crop" ||
+        item.params.prompt === "quadrants crop";
+
+      // 获取主图（优先本地路径，但参考图需远程地址）
+      const resultLocalPath = item.result_paths?.[0] || "";
+      const resultRemoteUrl = item.result_urls?.[0] || "";
+
       const modalHtml = `
-            <div class="modal fade" id="historyDetailModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content bg-dark text-light">
-                        <div class="modal-header">
-                            <h5 class="modal-title">历史记录详情</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="text-center mb-3">
-                              <a href="${resultUrl}" data-lightbox="history-detail"><img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;"></a>
-                            </div>
-                            <div>${paramsText}</div>
-                            ${inputHtml}
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">
-                                删除
-                            </button>
-                            <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                                编辑
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
-                            <button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                                使用参数
-                            </button>
-                        </div>
-                    </div>
+        <div class="modal fade" id="historyDetailModal" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content bg-dark text-light">
+              <div class="modal-header">
+                <h5 class="modal-title">历史记录详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="text-center mb-3">
+                  <a href="${resultRemoteUrl || resultLocalPath}" data-lightbox="history-detail">
+                    <img src="${resultRemoteUrl || resultLocalPath}" class="img-fluid rounded" style="max-height:400px;">
+                  </a>
                 </div>
+                <div>${paramsText}</div>
+                ${inputHtml}
+              </div>
+              <div class="modal-footer">
+                ${deleteBtn}
+                <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                  编辑
+                </button>
+                ${useParamsBtn}
+                <button type="button" class="btn btn-outline-success" id="useAsReferenceBtn"
+                  data-local="${resultLocalPath}"
+                  data-remote="${resultRemoteUrl}"
+                  data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                  作为参考图
+                </button>
+              </div>
             </div>
-        `;
+          </div>
+        </div>
+      `;
 
       // 插入并显示
       $("#historyList").append(modalHtml);
@@ -445,6 +475,8 @@
         $(this).remove();
       });
     }
+    // 暴露方法到全局
+    window.showHistoryDetailModal = showHistoryDetailModal;
 
     // 使用参数（复用原有逻辑）
     $(document).on("click", "#useParamsBtn", function () {
@@ -555,6 +587,63 @@
       )?.hide();
     });
 
+    // 新增：作为参考图
+    $(document).on("click", "#useAsReferenceBtn", async function () {
+      const localPath = $(this).data("local");
+      const remoteUrl = $(this).data("remote");
+      const item = $(this).data("item");
+
+      let usableLocal = localPath;
+      let usableRemote = remoteUrl;
+
+      // 若没有有效的 ImgBB 远程地址，先上传
+      if (!usableRemote || !usableRemote.startsWith("https://i.ibb.co/")) {
+        if (!usableLocal) {
+          alert("无法获取图片源，无法作为参考图");
+          return;
+        }
+
+        try {
+          const resp = await fetch(usableLocal);
+          if (!resp.ok) throw new Error("无法读取本地图片");
+          const blob = await resp.blob();
+          const formData = new FormData();
+          formData.append("file", blob, "reference.jpg");
+
+          const uploadRes = await fetch("/quick-upload", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!uploadRes.ok) throw new Error("上传失败");
+          const data = await uploadRes.json();
+          usableRemote = data.url;
+          usableLocal = data.local_path || usableLocal;
+        } catch (e) {
+          console.error("上传参考图失败:", e);
+          showToast("上传参考图失败，请重试", "error", 3000);
+          return;
+        }
+      }
+
+      // 加入参考图
+      const success = window.AIImageState?.addFromQuickAccess(
+        usableLocal,
+        usableRemote,
+      );
+      if (success) {
+        if (typeof window.UploadModule?.renderPreview === "function") {
+          window.UploadModule.renderPreview();
+        }
+        showToast("已添加为参考图", "success", 2000);
+        // 关闭模态框
+        bootstrap.Modal.getInstance(
+          document.getElementById("historyDetailModal"),
+        )?.hide();
+      } else {
+        showToast("参考图已存在或数量已达上限（最多10张）", "warning", 2500);
+      }
+    });
     // document ready 结束
   });
 })();

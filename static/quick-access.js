@@ -170,6 +170,7 @@ window.QuickAccess = (function () {
     function renderDynamicFields() {
       const cat = $('input[name="qaCategory"]:checked').val();
       let fieldsHtml = "";
+
       if (cat === "none") {
         fieldsHtml = `
           <div class="mb-3">
@@ -178,11 +179,32 @@ window.QuickAccess = (function () {
           </div>
         `;
       } else {
+        // 收集已有的 group 名字（去重）
+        const existingGroups = [
+          ...new Set(
+            images
+              .filter((img) => img.category === cat)
+              .map((img) => img.group)
+              .filter((g) => g && typeof g === "string"),
+          ),
+        ].sort();
+
+        // 构建选项
+        let optionsHtml = `<option value="">（请选择或输入新名字）</option>`;
+        existingGroups.forEach((g) => {
+          const selected = g === group ? "selected" : "";
+          optionsHtml += `<option value="${g}" ${selected}>${g}</option>`;
+        });
+        optionsHtml += `<option value="__new__" ${group && !existingGroups.includes(group) ? "selected" : ""}>其他（请输入）…</option>`;
+
         const label = cat === "角色" ? "角色名字" : "场景名字";
         fieldsHtml += `
           <div class="mb-3">
             <label class="form-label">${label}</label>
-            <input type="text" class="form-control" id="qaGroup" value="${group}">
+            <select class="form-select" id="qaGroupSelect">
+              ${optionsHtml}
+            </select>
+            <input type="text" class="form-control mt-1 d-none" id="qaGroupInput" placeholder="输入新名字…" value="${group && !existingGroups.includes(group) ? group : ""}">
           </div>
         `;
 
@@ -218,7 +240,20 @@ window.QuickAccess = (function () {
           </div>
         `;
       }
+
       $("#qaDynamicFields").html(fieldsHtml);
+
+      // 切换“其他…”时显示输入框
+      $("#qaGroupSelect")
+        .off("change")
+        .on("change", function () {
+          const val = $(this).val();
+          if (val === "__new__") {
+            $("#qaGroupInput").removeClass("d-none").focus();
+          } else {
+            $("#qaGroupInput").addClass("d-none");
+          }
+        });
     }
 
     // 初始渲染
@@ -249,7 +284,13 @@ window.QuickAccess = (function () {
             : {}),
         };
       } else {
-        const group = $("#qaGroup").val().trim();
+        let group;
+        const selectVal = $("#qaGroupSelect").val();
+        if (selectVal === "__new__") {
+          group = $("#qaGroupInput").val().trim();
+        } else {
+          group = selectVal;
+        }
         if (!group) {
           showToast(`${cat}名字不能为空`, "warning");
           return;

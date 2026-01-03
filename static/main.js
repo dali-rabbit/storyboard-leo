@@ -438,8 +438,8 @@
               </div>
               <div class="modal-body">
                 <div class="text-center mb-3">
-                  <a href="${resultRemoteUrl || resultLocalPath}" data-lightbox="history-detail">
-                    <img src="${resultRemoteUrl || resultLocalPath}" class="img-fluid rounded" style="max-height:400px;">
+                  <a href="${resultLocalPath}" data-lightbox="history-detail">
+                    <img src="${resultLocalPath}" class="img-fluid rounded" style="max-height:400px;">
                   </a>
                 </div>
                 <div>${paramsText}</div>

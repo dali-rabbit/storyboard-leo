@@ -63,3 +63,5 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+merge_code.py

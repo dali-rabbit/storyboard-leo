@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import shutil
+import tempfile
 import uuid
 from datetime import datetime
 from io import BytesIO
@@ -16,6 +17,7 @@ from PIL import Image
 
 from plugins import get_face_swap_plugin
 from test_gen_api import generate_via_image_fallback
+from uploader import UploadError, upload_file
 
 load_dotenv()
 
@@ -122,45 +124,50 @@ def index():
 
 @app.route("/upload-images", methods=["POST"])
 def upload_images():
-    """上传图片到 ImgBB（供 API 使用），同时保存 JPG 副本到本地（供历史记录）"""
     files = request.files.getlist("images")
     if not files:
         return jsonify({"error": "No images provided"}), 400
 
-    imgbb_urls = []
+    external_urls = []
     local_paths = []
 
     for file in files[:10]:
         if not file.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
             continue
 
-        # 步骤 1: 上传到 ImgBB
-        # 修复 URL 末尾空格问题！
-        imgbb_resp = requests.post(
-            "https://api.imgbb.com/1/upload",  # ← 删除末尾空格
-            data={"key": IMGBB_API_KEY},
-            files={"image": file},
-        )
-        if imgbb_resp.status_code != 200:
-            print(f"[ImgBB] Upload failed: {imgbb_resp.text}")
-            continue
-
-        imgbb_url = imgbb_resp.json()["data"]["url"]
-        imgbb_urls.append(imgbb_url)
-
-        # 步骤 2: 保存本地 JPG 副本（从原始 file 重新读，因为 file.stream 可能已耗尽）
-        # 重置 stream 指针
+        # 1. 保存本地 JPG 副本（用于历史记录）
         file.stream.seek(0)
         local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
-        if local_path:
-            local_paths.append("/" + local_path.replace("\\", "/"))
+        if not local_path:
+            continue
+        local_paths.append("/" + local_path.replace("\\", "/"))
 
-    return jsonify(
-        {
-            "urls": imgbb_urls,  # 给后端 API 用（外网可访问）
-            "local_paths": local_paths,  # 给前端预览用（本地路径）
-        }
-    )
+        # 2. 上传到外部服务（ImgBB 或 GitHub+jsDelivr）
+        try:
+            # 临时保存文件用于上传
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = tmp.name
+                with open(local_path, "rb") as src:
+                    tmp.write(src.read())
+            # 上传
+            external_url = upload_file(tmp_path, file.filename)
+            external_urls.append(external_url)
+        except Exception as e:
+            print(f"[Upload External Error] {e}")
+            external_urls.append(None)
+        finally:
+            if "tmp_path" in locals():
+                Path(tmp_path).unlink(missing_ok=True)
+
+    # 过滤掉上传失败的
+    valid_records = [
+        (url, local) for url, local in zip(external_urls, local_paths) if url
+    ]
+    if not valid_records:
+        return jsonify({"error": "All uploads failed"}), 500
+
+    external_urls, local_paths = zip(*valid_records)
+    return jsonify({"urls": list(external_urls), "local_paths": list(local_paths)})
 
 
 @app.route("/generate", methods=["POST"])
@@ -298,27 +305,24 @@ def get_history():
 @app.route("/quick-upload", methods=["POST"])
 def quick_upload():
     file = request.files.get("file")
-    if not file:
+    if not file or not file.filename:
         return jsonify({"error": "No file"}), 400
+
     local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
     if not local_path:
         return jsonify({"error": "Save failed"}), 500
 
-    # 上传到 ImgBB
-    with open(local_path, "rb") as f:
-        imgbb_resp = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": IMGBB_API_KEY},
-            files={"image": f},
+    try:
+        external_url = upload_file(local_path, file.filename)
+        return jsonify(
+            {
+                "url": external_url,
+                "local_path": "/" + local_path.replace("\\", "/"),
+            }
         )
-    if imgbb_resp.status_code != 200:
-        return jsonify({"error": "ImgBB failed"}), 500
-    return jsonify(
-        {
-            "url": imgbb_resp.json()["data"]["url"],
-            "local_path": "/" + local_path.replace("\\", "/"),
-        }
-    )
+    except Exception as e:
+        print(f"[Quick Upload Error] {e}")
+        return jsonify({"error": "External upload failed"}), 500
 
 
 @app.route("/save-cropped-images", methods=["POST"])

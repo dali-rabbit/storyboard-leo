@@ -47,6 +47,7 @@ logs/
 uploads/
 static/uploads/
 static/generated/
+github_dir/
 
 # Distribution packages
 dist/

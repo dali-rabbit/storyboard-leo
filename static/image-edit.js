@@ -549,7 +549,9 @@ document
 document.getElementById("swapFaceBtn").addEventListener("click", async () => {
   // 1. 获取 QuickAccess 中标签为“角色”的图片
   const quickImages = window.QuickAccess?.getImages() || [];
-  const characterImages = quickImages.filter((img) => img.tag === "角色");
+  const characterImages = quickImages.filter(
+    (img) => img.category === "角色" && img.viewType === "face_closeup",
+  );
 
   if (characterImages.length === 0) {
     alert("暂无标记为“角色”的参考面部图片，请先在快捷访问中标记。");
@@ -560,12 +562,12 @@ document.getElementById("swapFaceBtn").addEventListener("click", async () => {
   let listHtml = "";
   characterImages.forEach((img, idx) => {
     const previewSrc = img.localPath || img.remoteUrl;
-    const title = img.title
-      ? `<div class="text-center small mt-1">${img.title}</div>`
+    const title = img.group
+      ? `<div class="text-center small mt-1">${img.group}</div>`
       : "";
     listHtml += `
       <div class="col-4 mb-3 text-center" style="cursor:pointer;" data-index="${idx}">
-        <img src="${previewSrc}" class="rounded" style="width:80px;height:80px;object-fit:cover;">
+        <img src="${previewSrc}" class="rounded" style="width:100px;height:100px;object-fit:cover;">
         ${title}
       </div>
     `;

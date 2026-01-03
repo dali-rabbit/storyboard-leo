@@ -9,8 +9,21 @@ window.QuickAccess = (function () {
       const saved = localStorage.getItem(STORAGE_KEY);
       images = saved ? JSON.parse(saved) : [];
       images.forEach((img) => {
-        if (!img.tag) img.tag = "全部";
-        if (!img.title) img.title = ""; // ← 新增：默认无标题
+        // 迁移老数据
+        if (img.tag && img.tag !== "全部") {
+          // 老 tag → category
+          img.category = img.tag;
+          img.group = img.title || img.tag;
+          delete img.tag;
+          delete img.title;
+        } else if (!img.category) {
+          // 未分类：把 title 作为 group
+          img.category = null;
+          img.group = img.title || "";
+          delete img.tag;
+          delete img.title;
+        }
+        if (!img.addedAt) img.addedAt = new Date().toISOString();
       });
     } catch (e) {
       images = [];
@@ -34,7 +47,7 @@ window.QuickAccess = (function () {
 
     let usableLocal = localPath;
     let usableRemote = remoteUrl;
-    if (usableRemote && !usableRemote.startsWith("https://i.ibb.co")) {
+    if (usableRemote && !usableRemote.startsWith("https://")) {
       usableRemote = null;
     }
 
@@ -101,6 +114,207 @@ window.QuickAccess = (function () {
     renderSidebar();
   }
 
+  // ===== 新增：显示添加/编辑弹窗 =====
+  function showAddQuickAccessModal(imgData = null) {
+    // imgData 用于编辑已有项
+    const isEditing = !!imgData;
+    const category = imgData?.category || "none";
+    const group = imgData?.group || "";
+    const viewType = imgData?.viewType || "";
+    const note = imgData?.note || "";
+
+    const modalId = "quickAccessDetailModal";
+    let html = `
+    <div class="modal fade" id="${modalId}" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header">
+            <h5 class="modal-title">${isEditing ? "图片信息" : "图片信息"}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <!-- 分类选择 -->
+            <div class="mb-3">
+              <label class="form-label">分类</label>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaNone" value="none" ${category === "none" ? "checked" : ""}>
+                <label class="form-check-label" for="qaNone">不分类</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaChar" value="角色" ${category === "角色" ? "checked" : ""}>
+                <label class="form-check-label" for="qaChar">角色</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaScene" value="场景" ${category === "场景" ? "checked" : ""}>
+                <label class="form-check-label" for="qaScene">场景</label>
+              </div>
+            </div>
+
+            <!-- 动态字段容器 -->
+            <div id="qaDynamicFields"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-primary" id="qaSaveBtn">${isEditing ? "保存" : "添加"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    `;
+    $("#quickSidebar").append(html);
+    const modal = new bootstrap.Modal(document.getElementById(modalId), {
+      backdrop: false, // ← 关键：关闭遮罩层
+    });
+    modal.show();
+
+    // 动态渲染字段
+    function renderDynamicFields() {
+      const cat = $('input[name="qaCategory"]:checked').val();
+      let fieldsHtml = "";
+      if (cat === "none") {
+        fieldsHtml = `
+          <div class="mb-3">
+            <label class="form-label">标题</label>
+            <input type="text" class="form-control" id="qaTitle" value="${group}">
+          </div>
+        `;
+      } else {
+        const label = cat === "角色" ? "角色名字" : "场景名字";
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">${label}</label>
+            <input type="text" class="form-control" id="qaGroup" value="${group}">
+          </div>
+        `;
+
+        // 视角下拉
+        const charViews = [
+          { value: "front_full", label: "正面全身" },
+          { value: "side_full", label: "侧面全身" },
+          { value: "back_full", label: "背面全身" },
+          { value: "face_closeup", label: "面部特写" },
+        ];
+        const sceneViews = [
+          { value: "wide_shot", label: "全景" },
+          { value: "medium_shot", label: "近景" },
+          { value: "birdseye", label: "俯视" },
+          { value: "wormseye", label: "仰视" },
+        ];
+        const views = cat === "角色" ? charViews : sceneViews;
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">视角</label>
+            <select class="form-select" id="qaViewType">
+              <option value="">（可选）</option>
+              ${views.map((v) => `<option value="${v.value}" ${viewType === v.value ? "selected" : ""}>${v.label}</option>`).join("")}
+            </select>
+          </div>
+        `;
+
+        // 备注
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">备注（可选）</label>
+            <input type="text" class="form-control" id="qaNote" placeholder="如：校服、雨天" value="${note}">
+          </div>
+        `;
+      }
+      $("#qaDynamicFields").html(fieldsHtml);
+    }
+
+    // 初始渲染
+    renderDynamicFields();
+    $('input[name="qaCategory"]').on("change", renderDynamicFields);
+
+    // 保存逻辑
+    $("#qaSaveBtn").on("click", async () => {
+      const cat = $('input[name="qaCategory"]:checked').val();
+      let newImage = null;
+      if (cat === "none") {
+        const title = $("#qaTitle").val().trim();
+        if (!title) {
+          showToast("标题不能为空", "warning");
+          return;
+        }
+        newImage = {
+          category: null,
+          group: title, // 老 title 兼容字段
+          viewType: null,
+          note: null,
+          ...(imgData
+            ? {
+                localPath: imgData.localPath,
+                remoteUrl: imgData.remoteUrl,
+                addedAt: imgData.addedAt,
+              }
+            : {}),
+        };
+      } else {
+        const group = $("#qaGroup").val().trim();
+        if (!group) {
+          showToast(`${cat}名字不能为空`, "warning");
+          return;
+        }
+        newImage = {
+          category: cat,
+          group: group,
+          viewType: $("#qaViewType").val() || null,
+          note: $("#qaNote").val().trim() || null,
+          ...(imgData
+            ? {
+                localPath: imgData.localPath,
+                remoteUrl: imgData.remoteUrl,
+                addedAt: imgData.addedAt,
+              }
+            : {}),
+        };
+      }
+
+      if (!isEditing) {
+        // 新增：需传入图片路径
+        if (!window.__currentQuickAddImage) {
+          showToast("图片信息缺失", "error");
+          return;
+        }
+        newImage.localPath = window.__currentQuickAddImage.localPath;
+        newImage.remoteUrl = window.__currentQuickAddImage.remoteUrl;
+        newImage.addedAt = new Date().toISOString();
+        images.push(newImage);
+      } else {
+        // 编辑：替换原数据
+        const idx = images.findIndex(
+          (i) =>
+            i.localPath === imgData.localPath &&
+            i.remoteUrl === imgData.remoteUrl,
+        );
+        if (idx !== -1) images[idx] = newImage;
+      }
+
+      save();
+      renderSidebar();
+      modal.hide();
+    });
+
+    // 删除（仅编辑时）
+    if (isEditing) {
+      $("#qaDeleteBtn").on("click", () => {
+        if (confirm("确定删除？")) {
+          const idx = images.findIndex(
+            (i) =>
+              i.localPath === imgData.localPath &&
+              i.remoteUrl === imgData.remoteUrl,
+          );
+          if (idx !== -1) images.splice(idx, 1);
+          save();
+          renderSidebar();
+          modal.hide();
+        }
+      });
+    }
+
+    // 自动清理
+    $(`#${modalId}`).on("hidden.bs.modal", () => $(`#${modalId}`).remove());
+  }
+
   function renderSidebar() {
     const $sidebar = $("#quickSidebar");
     // 若侧边栏收起，清除内容（避免 DOM 残留）
@@ -148,42 +362,113 @@ window.QuickAccess = (function () {
     const filteredImages =
       currentFilter === "all"
         ? images
-        : images.filter((img) => img.tag === currentFilter);
+        : images.filter((img) => img.category === currentFilter);
 
-    let html = "";
-    filteredImages.forEach((img, i) => {
-      const originalIndex = images.findIndex(
-        (item) =>
-          item.localPath === img.localPath && item.remoteUrl === img.remoteUrl,
-      );
+    // 替换原 $container.html(html) 部分
+    // 先分类
+    const byCategory = {
+      角色: {},
+      场景: {},
+      未分类: [],
+    };
 
-      // 标题显示（有标题才显示文字）
-      const titleDisplay = img.title
-        ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${img.title}</div>`
-        : "";
-
-      html += `
-        <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
-             style="width:100px;height:100px;cursor:pointer;" title="${img.title || "点击加入参考图"}">
-          <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
-          ${titleDisplay}
-          <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
-            <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">
-              ⋮
-            </button>
-            <ul class="dropdown-menu p-1" style="font-size:12px;">
-              <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="角色">角色</a></li>
-              <li><a class="dropdown-item quick-tag-btn" href="#" data-index="${originalIndex}" data-tag="场景">场景</a></li>
-              <li><hr class="dropdown-divider"></li>
-              <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">设置标题</a></li>
-              <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
-            </ul>
-          </div>
-        </div>
-      `;
+    filteredImages.forEach((img) => {
+      if (img.category === "角色") {
+        if (!byCategory["角色"][img.group]) byCategory["角色"][img.group] = [];
+        byCategory["角色"][img.group].push(img);
+      } else if (img.category === "场景") {
+        if (!byCategory["场景"][img.group]) byCategory["场景"][img.group] = [];
+        byCategory["场景"][img.group].push(img);
+      } else {
+        byCategory["未分类"].push(img);
+      }
     });
 
+    let html = "";
+
+    // 渲染角色
+    for (const [group, imgs] of Object.entries(byCategory["角色"])) {
+      html += `
+        <div class="quick-group">
+          <h6 class="text-white mt-3 mb-1">${group}</h6>
+          <div class="d-flex flex-wrap gap-2">
+      `;
+      imgs.forEach((img) => {
+        const title =
+          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
+    // 渲染场景
+    for (const [group, imgs] of Object.entries(byCategory["场景"])) {
+      html += `
+        <div class="quick-group">
+          <h6 class="text-white mt-3 mb-1">${group}</h6>
+          <div class="d-flex flex-wrap gap-2">
+      `;
+      imgs.forEach((img) => {
+        const title =
+          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
+    // 渲染未分类
+    if (byCategory["未分类"].length > 0) {
+      html += `
+        <div class="quick-group">
+          <h6 class="text-white mt-3 mb-1 text-secondary">未分类</h6>
+          <div class="d-flex flex-wrap gap-2">
+      `;
+      byCategory["未分类"].forEach((img) => {
+        const title = img.group || "";
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
     $container.html(html);
+
+    // 辅助函数
+    function getViewTypeLabel(key) {
+      const map = {
+        front_full: "正面全身",
+        side_full: "侧面全身",
+        back_full: "背面全身",
+        face_closeup: "面部特写",
+        wide_shot: "全景",
+        medium_shot: "近景",
+        birdseye: "俯视",
+        wormseye: "仰视",
+      };
+      return map[key] || "";
+    }
+
+    function buildQuickImgItem(img, title) {
+      const originalIndex = images.findIndex(
+        (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
+      );
+      const titleDisplay = title
+        ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
+        : "";
+      return `
+      <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
+           style="width:120px;height:120px;cursor:pointer;" title="${title || "点击加入参考图"}">
+        <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
+        ${titleDisplay}
+        <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
+          <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
+          <ul class="dropdown-menu p-1" style="font-size:12px;">
+            <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
+            <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
+          </ul>
+        </div>
+      </div>
+      `;
+    }
 
     // 重新绑定事件（使用事件委托）
     $container.off("click").on("click", ".quick-img-item", function (e) {
@@ -242,11 +527,11 @@ window.QuickAccess = (function () {
 
         const originalEvent = e.originalEvent;
         const ghost = this.cloneNode(true);
-        ghost.style.width = "80px";
-        ghost.style.height = "80px";
+        ghost.style.width = "100px";
+        ghost.style.height = "100px";
         ghost.style.opacity = "0.9";
         ghost.style.borderRadius = "4px";
-        ghost.style.objectFit = "cover";
+        ghost.style.objectFit = "contain";
         ghost.style.pointerEvents = "none";
         const ghostDiv = document.createElement("div");
         ghostDiv.appendChild(ghost);
@@ -284,17 +569,16 @@ window.QuickAccess = (function () {
       });
 
     // 设置标题
+    // 替换原 .quick-title-btn 逻辑
     $container
       .off("click", ".quick-title-btn")
       .on("click", ".quick-title-btn", function (e) {
         e.preventDefault();
         e.stopPropagation();
         const index = $(this).data("index");
-        const currentTitle = images[index]?.title || "";
-        const newTitle = prompt("请输入图片标题：", currentTitle);
-        if (newTitle !== null) {
-          // 用户点击“取消”返回 null，不保存
-          setTitle(index, newTitle);
+        const img = images[index];
+        if (img) {
+          showAddQuickAccessModal(img); // ← 改为编辑模式
         }
       });
 

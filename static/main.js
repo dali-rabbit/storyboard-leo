@@ -597,7 +597,7 @@
       let usableRemote = remoteUrl;
 
       // 若没有有效的 ImgBB 远程地址，先上传
-      if (!usableRemote || !usableRemote.startsWith("https://i.ibb.co/")) {
+      if (!usableRemote || !usableRemote.startsWith("https://")) {
         if (!usableLocal) {
           alert("无法获取图片源，无法作为参考图");
           return;

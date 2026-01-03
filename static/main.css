@@ -354,3 +354,11 @@ body {
     z-index: 999;
 }
 /* 更多可继续 */
+
+#quickSidebar .quick-group {
+    width: 100%;
+}
+
+#quickSidebar .quick-group:first-child h6 {
+    margin-top: 0 !important;
+}

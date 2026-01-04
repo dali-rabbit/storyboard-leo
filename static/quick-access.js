@@ -160,10 +160,20 @@ window.QuickAccess = (function () {
       </div>
     </div>
     `;
-    $("#quickSidebar").append(html);
-    const modal = new bootstrap.Modal(document.getElementById(modalId), {
-      backdrop: false, // ← 关键：关闭遮罩层
-    });
+    // 替换原初始化代码
+    $("#quickAccessWindow").append(html);
+
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) {
+      console.log("not modal");
+      return;
+    }
+
+    // ✅ 关键修复：通过 data attribute 设置 backdrop
+    modalEl.setAttribute("data-bs-backdrop", "false");
+    modalEl.setAttribute("data-bs-keyboard", "true"); // 可选
+
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
 
     // 动态渲染字段
@@ -356,49 +366,80 @@ window.QuickAccess = (function () {
     $(`#${modalId}`).on("hidden.bs.modal", () => $(`#${modalId}`).remove());
   }
 
-  function renderSidebar() {
-    const $sidebar = $("#quickSidebar");
-    // 若侧边栏收起，清除内容（避免 DOM 残留）
-    if ($sidebar.hasClass("collapsed")) {
-      $sidebar.find(".quick-images").remove();
-      $sidebar.find(".quick-filter").remove();
-      return;
-    }
+  // 辅助函数
+  function getViewTypeLabel(key) {
+    const map = {
+      front_full: "正面全身",
+      side_full: "侧面全身",
+      back_full: "背面全身",
+      face_closeup: "面部特写",
+      wide_shot: "全景",
+      medium_shot: "近景",
+      birdseye: "俯视",
+      wormseye: "仰视",
+    };
+    return map[key] || "";
+  }
 
-    // 渲染顶部过滤器
-    let $filter = $sidebar.find(".quick-filter");
+  function buildQuickImgItem(img, title) {
+    const originalIndex = images.findIndex(
+      (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
+    );
+    const titleDisplay = title
+      ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
+      : "";
+    return `
+    <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
+         style="width:120px;height:120px;cursor:pointer;" title="${title || "点击加入参考图"}">
+      <img draggable="true" src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
+      ${titleDisplay}
+      <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
+        <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
+        <ul class="dropdown-menu p-1" style="font-size:12px;">
+          <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
+          <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
+        </ul>
+      </div>
+    </div>
+    `;
+  }
+
+  function renderSidebar(
+    containerSelector = "#quickAccessWindow .quick-images-container",
+  ) {
+    const $container = $(containerSelector);
+    if ($container.length === 0) return;
+
+    let $renderTarget;
+
+    // —————— 1. 确定渲染目标容器 ——————
+    $container.empty();
+    $renderTarget = $container;
+
+    // —————— 2. 渲染过滤器 ——————
+
+    let $filter = $renderTarget.find(".quick-filter");
     if ($filter.length === 0) {
       $filter = $(`
-        <div class="quick-filter d-flex gap-2 mb-2">
-          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
-        </div>
-      `);
-      $sidebar.append($filter);
-
+          <div class="quick-filter d-flex gap-2 mb-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
+          </div>
+        `);
+      $renderTarget.append($filter);
       $filter.on("click", ".filter-btn", function () {
         const filter = $(this).data("filter");
         setFilter(filter);
-        $filter.find(".filter-btn").removeClass("active");
-        $(this).addClass("active");
+        // $filter.find(".filter-btn").removeClass("active");
+        // $(this).addClass("active");
       });
-
-      // 初始化激活状态
       $filter
         .find(`.filter-btn[data-filter="${currentFilter}"]`)
         .addClass("active");
     }
 
-    // 渲染图片容器
-    let $container = $sidebar.find(".quick-images");
-    if ($container.length === 0) {
-      $container = $(`
-        <div class="quick-images mt-2 d-flex flex-wrap gap-2" style="justify-content: flex-start;"></div>
-      `);
-      $sidebar.append($container);
-    }
-
+    // —————— 3. 构建图像 HTML ——————
     // 过滤图片
     const filteredImages =
       currentFilter === "all"
@@ -430,10 +471,10 @@ window.QuickAccess = (function () {
     // 渲染角色
     for (const [group, imgs] of Object.entries(byCategory["角色"])) {
       html += `
-        <div class="quick-group">
-          <h6 class="text-white mt-3 mb-1">${group}</h6>
-          <div class="d-flex flex-wrap gap-2">
-      `;
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1">${group}</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
       imgs.forEach((img) => {
         const title =
           getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
@@ -445,10 +486,10 @@ window.QuickAccess = (function () {
     // 渲染场景
     for (const [group, imgs] of Object.entries(byCategory["场景"])) {
       html += `
-        <div class="quick-group">
-          <h6 class="text-white mt-3 mb-1">${group}</h6>
-          <div class="d-flex flex-wrap gap-2">
-      `;
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1">${group}</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
       imgs.forEach((img) => {
         const title =
           getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
@@ -460,10 +501,10 @@ window.QuickAccess = (function () {
     // 渲染未分类
     if (byCategory["未分类"].length > 0) {
       html += `
-        <div class="quick-group">
-          <h6 class="text-white mt-3 mb-1 text-secondary">未分类</h6>
-          <div class="d-flex flex-wrap gap-2">
-      `;
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1 text-secondary">未分类</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
       byCategory["未分类"].forEach((img) => {
         const title = img.group || "";
         html += buildQuickImgItem(img, title);
@@ -471,48 +512,16 @@ window.QuickAccess = (function () {
       html += `</div></div>`;
     }
 
-    $container.html(html);
+    // —————— 4. 插入 HTML ——————
+    // $renderTarget.html(html);
+    $renderTarget.append($(html));
 
-    // 辅助函数
-    function getViewTypeLabel(key) {
-      const map = {
-        front_full: "正面全身",
-        side_full: "侧面全身",
-        back_full: "背面全身",
-        face_closeup: "面部特写",
-        wide_shot: "全景",
-        medium_shot: "近景",
-        birdseye: "俯视",
-        wormseye: "仰视",
-      };
-      return map[key] || "";
-    }
+    // —————— 5. 绑定交互事件 ——————
+    const $target = $renderTarget;
 
-    function buildQuickImgItem(img, title) {
-      const originalIndex = images.findIndex(
-        (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
-      );
-      const titleDisplay = title
-        ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
-        : "";
-      return `
-      <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
-           style="width:120px;height:120px;cursor:pointer;" title="${title || "点击加入参考图"}">
-        <img src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
-        ${titleDisplay}
-        <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
-          <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
-          <ul class="dropdown-menu p-1" style="font-size:12px;">
-            <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
-            <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
-          </ul>
-        </div>
-      </div>
-      `;
-    }
-
+    // 点击预览
     // 重新绑定事件（使用事件委托）
-    $container.off("click").on("click", ".quick-img-item", function (e) {
+    $target.off("click").on("click", ".quick-img-item", function (e) {
       if ($(e.target).closest(".dropdown").length) return;
 
       const $img = $(this).find("img");
@@ -551,7 +560,7 @@ window.QuickAccess = (function () {
       }
     });
 
-    $container
+    $target
       .off("dragstart")
       .on("dragstart", ".quick-img-item img", function (e) {
         const $img = $(this);
@@ -599,7 +608,7 @@ window.QuickAccess = (function () {
       });
 
     // 标签设置
-    $container
+    $target
       .off("click", ".quick-tag-btn")
       .on("click", ".quick-tag-btn", function (e) {
         e.preventDefault();
@@ -611,7 +620,7 @@ window.QuickAccess = (function () {
 
     // 设置标题
     // 替换原 .quick-title-btn 逻辑
-    $container
+    $target
       .off("click", ".quick-title-btn")
       .on("click", ".quick-title-btn", function (e) {
         e.preventDefault();
@@ -624,7 +633,7 @@ window.QuickAccess = (function () {
       });
 
     // 删除
-    $container
+    $target
       .off("click", ".quick-delete-btn")
       .on("click", ".quick-delete-btn", function (e) {
         e.preventDefault();
@@ -635,7 +644,7 @@ window.QuickAccess = (function () {
 
     // 初始化 Bootstrap dropdown（如果未自动初始化）
     if (typeof bootstrap !== "undefined" && bootstrap.Dropdown) {
-      $container.find('[data-bs-toggle="dropdown"]').each(function () {
+      $target.find('[data-bs-toggle="dropdown"]').each(function () {
         new bootstrap.Dropdown(this);
       });
     }

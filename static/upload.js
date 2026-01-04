@@ -102,10 +102,6 @@
         document.body.appendChild(ghost);
         e.dataTransfer.setDragImage(ghost, 40, 40);
 
-        // ===== 新增：初始化拖拽状态 =====
-        window.__isDraggingInsideUpload = true; // 默认在内部
-        $("#dragTargetOverlay").hide(); // 确保开始时不显示
-
         // 清理之前的监听（防止重复）
         if (window.__dragOverHandler) {
           document.removeEventListener("dragover", window.__dragOverHandler);
@@ -127,13 +123,11 @@
             if (!window.__isDraggingInsideUpload) {
               // 从外部回到内部
               window.__isDraggingInsideUpload = true;
-              $("#dragTargetOverlay").hide();
             }
           } else {
             if (window.__isDraggingInsideUpload) {
               // 首次离开上传区域
               window.__isDraggingInsideUpload = false;
-              $("#dragTargetOverlay").show(); // 显示全屏引导
             }
           }
         };
@@ -152,19 +146,8 @@
           .querySelectorAll(".image-label")
           .forEach((el) => (el.style.display = ""));
 
-        // 检查是否拖到了快捷侧边栏
-        if (window.__currentDragItem && window.__dragEndCoords) {
-          const { x, y } = window.__dragEndCoords;
-          const dropTarget = document.elementFromPoint(x, y);
-          const inSidebar = dropTarget?.closest("#quickSidebar");
-          if (inSidebar) {
-            window.QuickAccess?.addImage(window.__currentDragItem);
-          }
-        }
-
         // 清理
         delete window.__currentDragItem;
-        delete window.__dragEndCoords;
 
         item.classList.remove("dragging");
         window.__currentDragItem = null;
@@ -174,8 +157,6 @@
           document.removeEventListener("dragover", window.__dragOverHandler);
           window.__dragOverHandler = null;
         }
-
-        $("#dragTargetOverlay").hide(); // 无论结果，拖拽结束就隐藏
 
         // 清理 ghost image（可选）
         const ghost = document.querySelector('div[style*="top: -9999px"]');

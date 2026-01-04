@@ -3,7 +3,8 @@
 
 (function () {
   const state = window.AIImageState;
-  const ITEMS_PER_PAGE = 12;
+  // 全局变量记录当前页
+  let currentHistoryWindowPage = 1;
 
   // ===== 提示词预览 =====
   function updatePromptPreview() {
@@ -76,7 +77,7 @@
                         `;
           });
           $("#generatedPreview").html(html);
-          loadHistoryPage(1);
+          loadHistoryWindowPage(1);
         } else {
           alert("生成失败: " + (res.error || "未知错误"));
         }
@@ -92,104 +93,28 @@
     });
   });
 
-  // ===== 历史记录 =====
-  function showParamsModal(item) {
-    let inputHtml = "";
-    if (item.input_paths && item.input_paths.length > 0) {
-      inputHtml = '<h5>输入参考图：</h5><div class="d-flex flex-wrap gap-2">';
-      item.input_paths.forEach((url) => {
-        inputHtml += `<a href="${url}" data-lightbox="inputs-${item.id}"><img src="${url}" style="width:60px;height:60px;object-fit:cover;"></a>`;
-      });
-      inputHtml += "</div>";
+  /**
+   * 将指定图片载入“图片编辑”标签页并激活
+   * @param {Object} item - 包含 localPath 或 remoteUrl 的对象
+   */
+  function enterImageEditMode(item) {
+    // 1. 切换到“图片编辑”标签
+    const editTabBtn = document.querySelector("#image-split-tab");
+    if (editTabBtn) {
+      const tab = new bootstrap.Tab(editTabBtn);
+      tab.show();
     }
 
-    const modalHtml = `
-            <div class="modal fade" id="paramsModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content bg-dark text-light">
-                        <div class="modal-header">
-                            <h5 class="modal-title">生成参数</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <p><strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}</p>
-                            <p><strong>分辨率：</strong>${item.params.size}</p>
-                            <p><strong>长宽比：</strong>${item.params.aspect_ratio}</p>
-                            <p><strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}</p>
-                            ${inputHtml}
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-    $("#historyList").append(modalHtml);
-    const modal = new bootstrap.Modal(document.getElementById("paramsModal"));
-    modal.show();
-    $("#paramsModal").on("hidden.bs.modal", function () {
-      $(this).remove();
-    });
-  }
+    // 2. 优先使用本地路径（localPath），没有则用远程 URL（remoteUrl）
+    const imgUrl = item.localPath || item.remoteUrl;
+    if (!imgUrl) {
+      console.warn("No image URL to edit", item);
+      return;
+    }
 
-  function loadHistoryPage(page) {
-    $.get(
-      "/history?page=" + page + "&limit=" + ITEMS_PER_PAGE,
-      function (data) {
-        let html = "";
-        data.records.forEach((item) => {
-          const url = item.result_paths[0] || "";
-          html += `
-            <div class="col-6 col-sm-4 col-md-2 mb-3">
-              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                <a href="javascript:void(0);" class="history-img-link">
-                  <img src="${url}" class="w-100 history-img" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                </a>
-              </div>
-            </div>
-          `;
-        });
-        $("#historyList").html(html);
-
-        let pg = "";
-        for (let i = 1; i <= data.pages; i++) {
-          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
-        }
-        $("#historyPagination").html(pg);
-
-        // ✅ 仅在 shouldHighlightNewRecords 为 true 时执行高亮和滚动
-        if (shouldHighlightNewRecords) {
-          shouldHighlightNewRecords = false; // 重置标志，只触发一次
-
-          const cards = document.querySelectorAll("#quick-gen .history-card");
-          const count = Math.min(4, cards.length);
-
-          // 高亮前 4 张
-          for (let i = 0; i < count; i++) {
-            const card = cards[i];
-            card.style.transition = "background-color 1.5s ease";
-            card.style.backgroundColor = "#ffeb3b";
-
-            setTimeout(() => {
-              card.style.backgroundColor = "";
-            }, 1500);
-          }
-
-          // 滚动到 #quick-gen 容器底部（或 historyList 底部）
-          const quickGenContainer = document.getElementById("quick-gen");
-          if (quickGenContainer) {
-            // 使用 smooth 滚动到底部
-            quickGenContainer.scrollIntoView({
-              behavior: "smooth",
-              block: "end",
-            });
-            // 或者如果你希望滚动的是整个页面到底部（取决于布局）：
-            // window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-          }
-        }
-      },
-    );
+    // 3. 触发图片加载（与 drag-drop 逻辑一致）
+    $("#hiddenImageLoader").attr("src", imgUrl);
+    $("#imageEditPlaceholder").hide();
   }
 
   // ===== 事件绑定 =====
@@ -214,166 +139,22 @@
 
     $(document).on("click", "#historyPagination .page-link", function (e) {
       e.preventDefault();
-      loadHistoryPage(parseInt($(this).text()));
+      loadHistoryWindowPage(parseInt($(this).text()));
     });
 
     // 初始化
     updatePromptPreview();
-    loadHistoryPage(1);
+    loadHistoryWindowPage(1);
 
     // 如果你希望在切换标签时执行某些 JS 逻辑（例如懒加载、初始化组件等），可以监听 Bootstrap 的 shown.bs.tab 事件：
     document.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
       tab.addEventListener("shown.bs.tab", (event) => {
         const targetId = event.target.getAttribute("data-bs-target");
         console.log("切换到标签:", targetId);
-        // 例如：if (targetId === '#storyboard') 初始化故事板编辑器
-        if (targetId === "#quick-gen") {
-          loadHistoryPage(1);
-        }
-      });
-    });
-
-    // 侧边栏展开/收起
-    $("#toggleSidebarBtn").click(function () {
-      const $sidebar = $("#quickSidebar");
-      const isCurrentlyCollapsed = $sidebar.hasClass("collapsed");
-
-      // 先切换类，触发动画
-      $sidebar.toggleClass("collapsed");
-
-      // 等待动画结束
-      $sidebar.one("transitionend", function () {
-        const $icon = $("#shortcut-icon");
-        if (isCurrentlyCollapsed) {
-          // 之前是展开，现在 collapsed → 显示文字
-          $icon.html("快捷访问");
-        } else {
-          // 之前是 collapsed，现在展开 → 显示 ★
-          $icon.html("★");
-        }
-        // 渲染快捷图
-        if (window.QuickAccess) window.QuickAccess.renderSidebar();
       });
     });
 
     // ===== 拖拽到目标区域逻辑 =====
-    let isDraggingFromValidSource = false;
-    let dragOrigin = null;
-
-    // 监听所有 dragstart（参考图 + 历史图）
-    $(document).on("dragstart", ".history-img", function (e) {
-      const $el = $(this);
-      const originalEvent = e.originalEvent; // 获取原生 DragEvent
-
-      let itemData = null;
-      const item = $el.data("history-item");
-      itemData = {
-        localPath: item?.result_paths?.[0],
-        remoteUrl: item?.result_urls?.[0],
-      };
-
-      if (itemData) {
-        window.__draggedItem = itemData;
-        isDraggingFromValidSource = true;
-        dragOrigin = this; // 原生元素
-
-        // 创建拖影
-        const img = this.cloneNode(true);
-        img.style.width = "80px";
-        img.style.height = "80px";
-        img.style.opacity = "0.9";
-        img.style.borderRadius = "4px";
-        img.style.objectFit = "cover";
-        img.style.pointerEvents = "none";
-
-        const ghost = document.createElement("div");
-        ghost.appendChild(img);
-        ghost.style.position = "absolute";
-        ghost.style.top = "-9999px";
-        document.body.appendChild(ghost);
-
-        // ✅ 正确使用原生 dataTransfer
-        originalEvent.dataTransfer.setDragImage(ghost, 40, 40);
-
-        // 清理 ghost
-        const cleanup = () => {
-          if (ghost.parentNode) {
-            ghost.parentNode.removeChild(ghost);
-          }
-          document.removeEventListener("dragend", cleanup);
-        };
-        document.addEventListener("dragend", cleanup);
-
-        // 延迟显示目标面板
-        setTimeout(() => {
-          if (isDraggingFromValidSource) {
-            $("#dragTargetOverlay").show();
-          }
-        }, 100);
-      }
-    });
-
-    // 允许拖拽到目标区域
-    $(document).on("dragover", ".drag-target-item", function (e) {
-      e.preventDefault(); // 关键！否则 drop 不会触发
-    });
-
-    /**
-     * 将指定图片载入“图片编辑”标签页并激活
-     * @param {Object} item - 包含 localPath 或 remoteUrl 的对象
-     */
-    function enterImageEditMode(item) {
-      // 1. 切换到“图片编辑”标签
-      const editTabBtn = document.querySelector("#image-split-tab");
-      if (editTabBtn) {
-        const tab = new bootstrap.Tab(editTabBtn);
-        tab.show();
-      }
-
-      // 2. 优先使用本地路径（localPath），没有则用远程 URL（remoteUrl）
-      const imgUrl = item.localPath || item.remoteUrl;
-      if (!imgUrl) {
-        console.warn("No image URL to edit", item);
-        return;
-      }
-
-      // 3. 触发图片加载（与 drag-drop 逻辑一致）
-      $("#hiddenImageLoader").attr("src", imgUrl);
-      $("#imageEditPlaceholder").hide();
-    }
-
-    // 处理 drop
-    $(document).on("drop", ".drag-target-item", function (e) {
-      e.preventDefault(); // 通常也在这里 preventDefault，防止浏览器默认行为（如打开图片）
-      const target = $(this).data("target");
-      const item = window.__draggedItem || window.__currentDragItem;
-
-      if (item && target === "quick") {
-        // 快捷访问
-        window.QuickAccess?.addImage(item);
-      } else if (item && target == "edit") {
-        enterImageEditMode(item);
-      } else if (item && target === "storyboard") {
-        // 单图：直接进入故事板
-        enterStoryboardMode([item]);
-      }
-
-      cleanupDragState();
-    });
-
-    // 监听 dragend（取消）
-    $(document).on("dragend dragcancel", "*", function () {
-      cleanupDragState();
-    });
-
-    function cleanupDragState() {
-      isDraggingFromValidSource = false;
-      window.__draggedItem = null;
-      window.__dragOrigin = null; // ← 新增
-      // 隐藏所有目标区域（包括重新显示快捷访问图标）
-      $(".drag-target-item[data-target='quick']").show(); // ← 恢复显示
-      $("#dragTargetOverlay").hide();
-    }
 
     // 点击历史卡片，弹出详情浮窗
     $(document).on("click", ".history-card", function (e) {
@@ -383,29 +164,31 @@
 
     function showHistoryDetailModal(item) {
       const isFromQuick = item.id?.startsWith("quick-");
-      // 在 modalHtml 的 footer 中，按条件隐藏按钮：
+      const resultUrl = item.result_paths[0] || item.result_urls[0] || "";
+
+      const hideUseParams =
+        item.params.prompt === "free crop" ||
+        item.params.prompt === "quadrants crop";
+
+      // 构建内容（和原来一样，但不再包含外层 modal 结构）
       const deleteBtn = isFromQuick
         ? ""
-        : `
-        <button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">
-          删除
-        </button>
-      `;
+        : `<button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">删除</button>`;
 
-      const useParamsBtn = `
-        <button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-          复刻
-        </button>
-      `;
-      // 生成参数文本（带换行）
-      const paramsText = `
-            <strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}<br>
-            <strong>分辨率：</strong>${item.params.size}<br>
-            <strong>长宽比：</strong>${item.params.aspect_ratio}<br>
-            <strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}
+      const useParamsBtn = hideUseParams
+        ? ""
+        : `<button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>复刻</button>`;
+
+      let paramsText = "";
+      if (!hideUseParams) {
+        paramsText = `
+          <strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}<br>
+          <strong>分辨率：</strong>${item.params.size}<br>
+          <strong>长宽比：</strong>${item.params.aspect_ratio}<br>
+          <strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}
         `;
+      }
 
-      // 输入图预览（如果有）
       let inputHtml = "";
       if (item.input_paths && item.input_paths.length > 0) {
         inputHtml =
@@ -416,64 +199,33 @@
         inputHtml += "</div>";
       }
 
-      // 结果图（主图）
-      const resultUrl = item.result_paths[0] || item.result_urls[0] || "";
-
-      // 判断是否应隐藏“复刻”按钮
-      const hideUseParams =
-        item.params.prompt === "free crop" ||
-        item.params.prompt === "quadrants crop";
-
-      // 获取主图（优先本地路径，但参考图需远程地址）
-      const resultLocalPath = item.result_paths?.[0] || "";
-      const resultRemoteUrl = item.result_urls?.[0] || "";
-
-      const modalHtml = `
-        <div class="modal fade" id="historyDetailModal" tabindex="-1">
-          <div class="modal-dialog modal-lg">
-            <div class="modal-content bg-dark text-light">
-              <div class="modal-header">
-                <h5 class="modal-title">历史记录详情</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-              </div>
-              <div class="modal-body">
-                <div class="text-center mb-3">
-                  <a href="${resultLocalPath}" data-lightbox="history-detail">
-                    <img src="${resultLocalPath}" class="img-fluid rounded" style="max-height:400px;">
-                  </a>
-                </div>
-                <div>${paramsText}</div>
-                ${inputHtml}
-              </div>
-              <div class="modal-footer">
-                ${deleteBtn}
-                <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                  编辑
-                </button>
-                ${useParamsBtn}
-                <button type="button" class="btn btn-outline-success" id="useAsReferenceBtn"
-                  data-local="${resultLocalPath}"
-                  data-remote="${resultRemoteUrl}"
-                  data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                  作为参考图
-                </button>
-              </div>
-            </div>
-          </div>
+      // 更新模态框内容
+      const $modal = $("#historyDetailModal");
+      $modal.find(".modal-body").html(`
+        <div class="text-center mb-3">
+          <a href="${resultUrl}" data-lightbox="history-detail">
+            <img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;">
+          </a>
         </div>
-      `;
+        ${paramsText}
+        ${inputHtml}
+      `);
 
-      // 插入并显示
-      $("#historyList").append(modalHtml);
-      const modal = new bootstrap.Modal(
-        document.getElementById("historyDetailModal"),
-      );
-      modal.show();
+      $modal.find(".modal-footer").html(`
+        ${deleteBtn}
+        <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>编辑</button>
+        ${useParamsBtn}
+        <button type="button" class="btn btn-outline-success" id="useAsReferenceBtn"
+          data-local="${resultUrl}"
+          data-remote="${resultUrl}"
+          data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+          作为参考图
+        </button>
+      `);
 
-      // 清理
-      $("#historyDetailModal").on("hidden.bs.modal", function () {
-        $(this).remove();
-      });
+      // 初始化或获取已有的 Modal 实例（推荐缓存，但简单场景可每次都 new）
+      const modalInstance = bootstrap.Modal.getOrCreateInstance($modal[0]);
+      modalInstance.show();
     }
     // 暴露方法到全局
     window.showHistoryDetailModal = showHistoryDetailModal;
@@ -558,7 +310,7 @@
               parseInt(
                 $("#historyPagination .page-item.active .page-link").text(),
               ) || 1;
-            loadHistoryPage(currentPage);
+            loadHistoryWindowPage(currentPage);
           } else {
             alert("删除失败: " + (res.error || "未知错误"));
           }
@@ -644,6 +396,311 @@
         showToast("参考图已存在或数量已达上限（最多10张）", "warning", 2500);
       }
     });
+
+    // ===== 工具条弹窗控制 =====
+    $(document).on("click", ".tool-btn", function () {
+      const target = $(this).data("target");
+      if (target === "quick-access") {
+        $("#quickAccessWindow").removeClass("d-none");
+        window.QuickAccess?.renderSidebar(
+          "#quickAccessWindow .quick-images-container",
+        );
+      } else if (target === "history-window") {
+        $("#historyWindow").removeClass("d-none");
+        loadHistoryWindowPage(1);
+      }
+    });
+
+    // 关闭窗口
+    $(document).on("click", "[data-dismiss]", function () {
+      const target = $(this).data("dismiss");
+      if (target === "quick-access") {
+        $("#quickAccessWindow").addClass("d-none");
+      } else if (target === "history-window") {
+        $("#historyWindow").addClass("d-none");
+      }
+    });
+
+    // 历史窗口分页
+    function loadHistoryWindowPage(page, limit = 12) {
+      currentHistoryWindowPage = page;
+      $.get(`/history?page=${page}&limit=${limit}`, function (data) {
+        let html = "";
+        data.records.forEach((item) => {
+          const url = item.result_paths[0] || "";
+          html += `
+            <div class="col-6 col-sm-4 col-md-3 mb-3">
+              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                <a href="${url}">
+                  <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
+                </a>
+              </div>
+            </div>
+          `;
+        });
+        $("#historyWindowList").html(html);
+
+        let pg = "";
+        for (let i = 1; i <= data.pages; i++) {
+          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
+        }
+        $("#historyWindowPagination").html(pg);
+      });
+    }
+
+    $(document).on(
+      "click",
+      "#historyWindowPagination .page-link",
+      function (e) {
+        e.preventDefault();
+        const page = parseInt($(this).text());
+        // 重新计算当前 limit（或缓存）
+        const win = document.getElementById("historyWindow");
+        const containerWidth =
+          win?.querySelector(".history-content")?.clientWidth || 400;
+        const limit = calculateHistoryItemsPerPage(containerWidth);
+        loadHistoryWindowPage(page, limit);
+      },
+    );
+
+    // 历史窗口卡片点击
+    $(document).on("click", "#historyWindowList .history-card", function () {
+      const item = $(this).data("item");
+      window.showHistoryDetailModal(item);
+    });
+
+    // ===== 拖拽移动浮动窗口 =====
+    function makeWindowDraggable(windowSelector) {
+      const winEl = document.querySelector(windowSelector); // ← 改名：winEl
+      if (!winEl) return;
+
+      let pos1 = 0,
+        pos2 = 0,
+        pos3 = 0,
+        pos4 = 0;
+
+      const header = winEl.querySelector(".floating-header");
+      if (!header) return;
+
+      header.style.cursor = "move";
+
+      header.onmousedown = dragMouseDown;
+
+      function dragMouseDown(e) {
+        e.preventDefault();
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+      }
+
+      function elementDrag(e) {
+        e.preventDefault();
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+
+        // ✅ 正确计算新位置
+        const newLeft = winEl.offsetLeft - pos1;
+        const newTop = winEl.offsetTop - pos2;
+
+        // ✅ 使用全局 window.innerWidth/Height（注意：不是 winEl.innerWidth！）
+        const maxX = window.innerWidth - winEl.offsetWidth;
+        const maxY = window.innerHeight - winEl.offsetHeight;
+
+        // ✅ 限制边界
+        winEl.style.left = Math.max(0, Math.min(newLeft, maxX)) + "px";
+        winEl.style.top = Math.max(0, Math.min(newTop, maxY)) + "px";
+
+        // ✅ 移除 transform（确保定位基于 left/top）
+        winEl.style.transform = "none";
+      }
+
+      function closeDragElement() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+      }
+    }
+
+    // 初始化拖拽
+    makeWindowDraggable("#quickAccessWindow");
+    makeWindowDraggable("#historyWindow");
+
+    // ===== 悬浮窗口图片拖拽支持 =====
+    $(document).on(
+      "dragstart",
+      "#historyWindow .history-card img, #quickAccessWindow .quick-img-item img",
+      function (e) {
+        const originalEvent = e.originalEvent;
+        let itemData = null;
+
+        // 来源：历史记录
+        if ($(this).closest("#historyWindow").length) {
+          const item = $(this).data("history-item");
+          if (item) {
+            itemData = {
+              type: "history",
+              localPath: item.result_paths?.[0] || "",
+              remoteUrl: item.result_urls?.[0] || "",
+              inputPaths: item.input_paths || [],
+              inputUrls: item.input_urls || [],
+              params: item.params || {},
+            };
+          }
+        }
+        // 来源：快捷访问
+        else if ($(this).closest("#quickAccessWindow").length) {
+          const item = $(this).data("quick-item");
+          if (item) {
+            itemData = {
+              type: "quick",
+              localPath: item.localPath,
+              remoteUrl: item.remoteUrl,
+              category: item.category,
+              group: item.group,
+              viewType: item.viewType,
+              note: item.note,
+            };
+          }
+        }
+
+        if (itemData) {
+          // 存储到全局（供 drop 区域读取）
+          window.__draggedItem = itemData;
+
+          // 设置拖影
+          const img = this.cloneNode(true);
+          img.style.width = "80px";
+          img.style.height = "80px";
+          img.style.opacity = "0.9";
+          img.style.borderRadius = "4px";
+          img.style.objectFit = "cover";
+          img.style.pointerEvents = "none";
+          const ghost = document.createElement("div");
+          ghost.appendChild(img);
+          ghost.style.position = "absolute";
+          ghost.style.top = "-9999px";
+          document.body.appendChild(ghost);
+          originalEvent.dataTransfer.setDragImage(ghost, 40, 40);
+
+          // 清理
+          const cleanup = () => {
+            if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+            document.removeEventListener("dragend", cleanup);
+          };
+          document.addEventListener("dragend", cleanup);
+
+          // 不显示 #dragTargetOverlay（你已移除，所以跳过）
+          return;
+        }
+      },
+    );
+
+    // 快捷访问窗口接收历史图
+    $(document).on(
+      "dragover",
+      "#quickAccessWindow .quick-images-container",
+      function (e) {
+        e.preventDefault();
+      },
+    );
+    $(document).on(
+      "drop",
+      "#quickAccessWindow .quick-images-container",
+      function (e) {
+        e.preventDefault();
+        const item = window.__draggedItem;
+        if (item && item.type === "history") {
+          // 提取主图
+          const imgToAdd = {
+            localPath: item.localPath,
+            remoteUrl: item.remoteUrl,
+          };
+          window.QuickAccess?.addImage(imgToAdd);
+          showToast("已添加到快捷访问", "success", 2000);
+        }
+        window.__draggedItem = null;
+      },
+    );
+
+    function makeResizable(windowSelector) {
+      const win = document.querySelector(windowSelector);
+      if (!win) return;
+
+      const handle = win.querySelector(".resize-handle");
+      if (!handle) return;
+
+      let isResizing = false;
+
+      handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        isResizing = true;
+        document.body.classList.add("resizing");
+        document.addEventListener("mousemove", resize);
+        document.addEventListener("mouseup", stopResize);
+      });
+
+      function resize(e) {
+        if (!isResizing) return;
+        const rect = win.getBoundingClientRect();
+        const dx = e.clientX - rect.right;
+        const dy = e.clientY - rect.bottom;
+
+        let newWidth = rect.width + dx;
+        let newHeight = rect.height + dy;
+
+        // 限制 min/max
+        newWidth = Math.min(800, Math.max(300, newWidth));
+        newHeight = Math.min(600, Math.max(200, newHeight));
+
+        win.style.width = newWidth + "px";
+        win.style.height = newHeight + "px";
+      }
+
+      function stopResize() {
+        isResizing = false;
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", resize);
+        document.removeEventListener("mouseup", stopResize);
+
+        // ✅ 调整结束：如果是历史窗口，重新加载
+        if (windowSelector === "#historyWindow") {
+          debouncedReloadHistoryWindow();
+        }
+      }
+    }
+
+    function calculateHistoryItemsPerPage(containerWidth) {
+      // 每张卡片约 100px 宽（含 gutter）
+      const cols = Math.max(2, Math.floor(containerWidth / 110));
+      // 高度区域约 400px 可用，每行 120px
+      const rows = Math.max(2, Math.floor(400 / 120));
+      return cols * rows;
+    }
+
+    function debounce(func, wait) {
+      let timeout;
+      return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    }
+
+    const debouncedReloadHistoryWindow = debounce(() => {
+      const win = document.getElementById("historyWindow");
+      if (!win) return;
+
+      const containerWidth = win.querySelector(".history-content").clientWidth;
+      const newLimit = calculateHistoryItemsPerPage(containerWidth);
+
+      // 可选：存入全局或闭包，避免重复加载相同 limit
+      loadHistoryWindowPage(currentHistoryWindowPage, newLimit);
+    }, 300);
+
+    makeResizable("#quickAccessWindow");
+    makeResizable("#historyWindow");
+
     // document ready 结束
   });
 })();

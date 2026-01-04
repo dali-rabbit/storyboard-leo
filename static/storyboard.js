@@ -73,10 +73,84 @@
     }
   }
 
+  function bindDropZoneEvents() {
+    const container = document.getElementById("storyboardPanels");
+    if (!container) return;
+
+    // 全局：阻止默认 dragover 行为（否则无法 drop）
+    container.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+
+    // 拖入某个分镜的 .panel-images 区域
+    container.addEventListener("dragenter", (e) => {
+      const target = e.target.closest(".panel-images");
+      if (target) {
+        target.classList.add("storyboard-drop-target");
+      }
+    });
+
+    container.addEventListener("dragleave", (e) => {
+      const target = e.target.closest(".panel-images");
+      if (target) {
+        // 防止子元素 leave 触发父元素 leave
+        const related = e.relatedTarget;
+        if (!target.contains(related)) {
+          target.classList.remove("storyboard-drop-target");
+        }
+      }
+    });
+
+    // 核心：drop 事件
+    container.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      const url = e.dataTransfer.getData("text/plain");
+      if (!url) return;
+
+      // 清除所有高亮
+      container.querySelectorAll(".storyboard-drop-target").forEach((el) => {
+        el.classList.remove("storyboard-drop-target");
+      });
+
+      // 判断是否 drop 到某个分镜的 .panel-images
+      const panelImages = e.target.closest(".panel-images");
+      if (panelImages) {
+        // 情况2：添加到指定分镜
+        const panelId = panelImages.closest("[data-panel-id]").dataset.panelId;
+        const panel = storyboardState.panels.find(
+          (p) => p.panel_id === panelId,
+        );
+        if (panel) {
+          panel.images.push(url);
+          renderPanels();
+          applyUniformAspectRatio();
+          updateSaveButton();
+          showToast("图片已添加到分镜", "success", 2000);
+        }
+      } else {
+        // 情况1：故事板为空 OR 拖到空白区域 → 新建分镜
+        if (storyboardState.panels.length === 0) {
+          addPanel({
+            images: [url],
+            description: "",
+            cameraMovement: "fixed",
+            cameraNote: "",
+          });
+          showToast("已创建新分镜并添加图片", "success", 2000);
+        } else {
+          // 可选：也可以提示“请拖到具体分镜区域”
+          showToast("请将图片拖到具体分镜卡片内", "info", 2000);
+        }
+      }
+    });
+  }
+
   function init() {
     renderPanels();
     applyUniformAspectRatio();
     bindGlobalEvents();
+    bindDropZoneEvents();
   }
 
   function bindGlobalEvents() {
@@ -168,7 +242,7 @@
       storyboardState.panels.forEach((panel) => {
         const imgHtml =
           panel.images.length === 0
-            ? '<div class="text-center text-muted py-3">点击“+图”添加图片</div>'
+            ? '<div class="text-center text-muted py-3">上传或拖入已有图片</div>'
             : panel.images
                 .map(
                   (url, idx) =>

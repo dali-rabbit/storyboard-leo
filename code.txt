@@ -1,0 +1,2151 @@
+---------------------
+index.html 内容如下
+--------------------
+<!-- 深色主题 index.html -->
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="dark">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>分镜狮</title>
+        <link
+            rel="icon"
+            type="image/png"
+            href="{{ url_for('static', filename='favicon-96x96.png') }}"
+            sizes="96x96"
+        />
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href="{{ url_for('static', filename='favicon.svg') }}"
+        />
+        <link
+            rel="shortcut icon"
+            href="{{ url_for('static', filename='favicon.ico') }}"
+        />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="{{ url_for('static', filename='apple-touch-icon.png') }}"
+        />
+        <link
+            rel="manifest"
+            href="{{ url_for('static', filename='site.webmanifest') }}"
+        />
+        <link
+            href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+            rel="stylesheet"
+        />
+        <link
+            href="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.4/css/lightbox.min.css"
+            rel="stylesheet"
+        />
+        <link
+            href="{{ url_for('static', filename='main.css') }}"
+            rel="stylesheet"
+        />
+    </head>
+    <body>
+        <!-- 工具侧边栏（垂直小图标） -->
+        <div id="toolSidebar" class="tool-sidebar">
+            <button
+                class="btn btn-dark tool-btn"
+                type="button"
+                title="快捷访问"
+                data-bs-toggle="tooltip"
+                data-bs-placement="right"
+                data-target="quick-access"
+            >
+                ★
+            </button>
+            <button
+                class="btn btn-dark tool-btn"
+                type="button"
+                title="历史记录"
+                data-bs-toggle="tooltip"
+                data-bs-placement="right"
+                data-target="history-window"
+            >
+                🕒
+            </button>
+        </div>
+        <div class="container my-4">
+            <!-- 标题 + 标签 -->
+            <div class="d-flex flex-column mb-4">
+                <div
+                    class="d-flex justify-content-between align-items-start mb-4"
+                >
+                    <h1 class="mb-0">🦁 分镜狮</h1>
+                    <!-- 顶部标签（选项卡） -->
+                    <ul class="nav nav-tabs ms-4" id="topTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button
+                                class="nav-link active"
+                                id="quick-gen-tab"
+                                data-bs-toggle="tab"
+                                data-bs-target="#quick-gen"
+                                type="button"
+                                role="tab"
+                                aria-controls="quick-gen"
+                                aria-selected="true"
+                            >
+                                快速生图
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button
+                                class="nav-link"
+                                id="image-split-tab"
+                                data-bs-toggle="tab"
+                                data-bs-target="#image-split"
+                                type="button"
+                                role="tab"
+                                aria-controls="image-split"
+                                aria-selected="false"
+                            >
+                                图片编辑
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button
+                                class="nav-link"
+                                id="storyboard-tab"
+                                data-bs-toggle="tab"
+                                data-bs-target="#storyboard"
+                                type="button"
+                                role="tab"
+                                aria-controls="storyboard"
+                                aria-selected="false"
+                            >
+                                故事板
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            <!-- Tab 内容 -->
+            <div class="tab-content" id="topTabsContent">
+                <!-- Tab 内容区域 -->
+                <div class="tab-content" id="topTabsContent">
+                    <!-- 快速生图（当前页面内容） -->
+                    <div
+                        class="tab-pane fade show active"
+                        id="quick-gen"
+                        role="tabpanel"
+                        aria-labelledby="quick-gen-tab"
+                    >
+                        <!-- 原有的左右两栏布局 -->
+                        <div class="row">
+                            <!-- 表单 -->
+                            <div class="col-lg-6">
+                                <!-- 你原来的上传和参数卡片 -->
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        上传参考图（最多10张）
+                                    </div>
+                                    <div class="card-body">
+                                        <!-- 隐藏原生 input -->
+                                        <input
+                                            type="file"
+                                            id="imageUpload"
+                                            multiple
+                                            accept="image/*"
+                                            class="d-none"
+                                        />
+
+                                        <!-- 拖拽上传区域 -->
+                                        <div
+                                            id="dropZone"
+                                            class="dashed-upload text-center py-4 mb-2"
+                                        >
+                                            <div class="text-muted">
+                                                📁 拖拽图片至此，或
+                                                <u>点击上传</u>
+                                            </div>
+                                        </div>
+
+                                        <!-- 上传进度条（初始隐藏） -->
+                                        <div
+                                            id="uploadProgress"
+                                            class="mt-2"
+                                            style="display: none"
+                                        >
+                                            <div
+                                                class="progress"
+                                                style="height: 8px"
+                                            >
+                                                <div
+                                                    class="progress-bar progress-bar-striped progress-bar-animated"
+                                                    role="progressbar"
+                                                    style="width: 0%"
+                                                ></div>
+                                            </div>
+                                            <small class="text-muted"
+                                                >上传中...</small
+                                            >
+                                        </div>
+
+                                        <!-- 图片预览 -->
+                                        <ul
+                                            id="uploadPreview"
+                                            class="d-flex flex-wrap gap-2 p-0 m-0"
+                                        ></ul>
+                                    </div>
+                                </div>
+
+                                <div class="card mb-4">
+                                    <div class="card-header">生成参数</div>
+                                    <div class="card-body">
+                                        <div class="mb-3">
+                                            <label class="form-label"
+                                                >分辨率</label
+                                            >
+                                            <select
+                                                id="resolution"
+                                                class="form-select"
+                                            >
+                                                <option value="1K">1K</option>
+                                                <option value="2K" selected>
+                                                    2K
+                                                </option>
+                                                <option value="4K">4K</option>
+                                            </select>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label class="form-label"
+                                                >长宽比</label
+                                            >
+                                            <select
+                                                id="aspectRatio"
+                                                class="form-select"
+                                            >
+                                                <option value="auto">
+                                                    Auto
+                                                </option>
+                                                <option value="1:1">1:1</option>
+                                                <option value="16:9">
+                                                    16:9
+                                                </option>
+                                                <option value="9:16">
+                                                    9:16
+                                                </option>
+                                                <option value="4:3">4:3</option>
+                                                <option value="3:4">3:4</option>
+                                                <option value="3:2">3:2</option>
+                                                <option value="2:3">2:3</option>
+                                                <option value="5:4">5:4</option>
+                                                <option value="4:5">4:5</option>
+                                                <option value="21:9">
+                                                    21:9
+                                                </option>
+                                            </select>
+                                        </div>
+
+                                        <div class="mb-3">
+                                            <label class="form-label"
+                                                >提示词模式</label
+                                            >
+                                            <div class="form-check">
+                                                <input
+                                                    class="form-check-input"
+                                                    type="radio"
+                                                    name="mode"
+                                                    id="modeRaw"
+                                                    value="raw"
+                                                    checked
+                                                />
+                                                <label
+                                                    class="form-check-label"
+                                                    for="modeRaw"
+                                                    >Raw 模式</label
+                                                >
+                                            </div>
+                                            <div class="form-check">
+                                                <input
+                                                    class="form-check-input"
+                                                    type="radio"
+                                                    name="mode"
+                                                    id="modeStoryboard"
+                                                    value="storyboard"
+                                                />
+                                                <label
+                                                    class="form-check-label"
+                                                    for="modeStoryboard"
+                                                    >分镜模式</label
+                                                >
+                                            </div>
+                                            <div class="form-check">
+                                                <input
+                                                    class="form-check-input"
+                                                    type="radio"
+                                                    name="mode"
+                                                    id="modeCharacter"
+                                                    value="character"
+                                                />
+                                                <label
+                                                    class="form-check-label"
+                                                    for="modeCharacter"
+                                                    >角色模式</label
+                                                >
+                                            </div>
+                                        </div>
+
+                                        <div id="rawSection">
+                                            <textarea
+                                                id="promptRaw"
+                                                class="form-control"
+                                                rows="4"
+                                                placeholder="请输入提示词..."
+                                            ></textarea>
+                                        </div>
+                                        <div
+                                            id="storyboardSection"
+                                            style="display: none"
+                                        >
+                                            <input
+                                                type="text"
+                                                id="prePrompt"
+                                                class="form-control mb-2"
+                                                placeholder="前提描述"
+                                            />
+                                            <input
+                                                type="text"
+                                                id="style"
+                                                class="form-control mb-2"
+                                                placeholder="风格"
+                                            />
+                                            <textarea
+                                                id="shot1"
+                                                class="form-control mb-2"
+                                                placeholder="分镜一"
+                                            ></textarea>
+                                            <textarea
+                                                id="shot2"
+                                                class="form-control mb-2"
+                                                placeholder="分镜二"
+                                            ></textarea>
+                                            <textarea
+                                                id="shot3"
+                                                class="form-control mb-2"
+                                                placeholder="分镜三"
+                                            ></textarea>
+                                            <textarea
+                                                id="shot4"
+                                                class="form-control"
+                                                placeholder="分镜四"
+                                            ></textarea>
+                                        </div>
+                                        <div
+                                            id="characterSection"
+                                            style="display: none"
+                                        >
+                                            <div class="mb-3">
+                                                <label class="form-label"
+                                                    >角色视角（可多选）</label
+                                                >
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewFront"
+                                                        value="正面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewFront"
+                                                        >正面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewSide"
+                                                        value="侧面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewSide"
+                                                        >侧面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewBack"
+                                                        value="背面全身"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewBack"
+                                                        >背面全身</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewFace"
+                                                        value="面部特写"
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewFace"
+                                                        >面部特写</label
+                                                    >
+                                                </div>
+                                                <div class="form-check">
+                                                    <input
+                                                        class="form-check-input"
+                                                        type="checkbox"
+                                                        id="viewSolidBg"
+                                                        value="纯色背景"
+                                                        checked
+                                                    />
+                                                    <label
+                                                        class="form-check-label"
+                                                        for="viewSolidBg"
+                                                        >纯色背景</label
+                                                    >
+                                                </div>
+                                            </div>
+
+                                            <div class="mb-3">
+                                                <label class="form-label"
+                                                    >其他说明（风格/姿态）</label
+                                                >
+                                                <textarea
+                                                    id="characterNotes"
+                                                    class="form-control"
+                                                    rows="2"
+                                                    placeholder="例如：日系二次元，站姿自然，表情温和..."
+                                                ></textarea>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-3">
+                                            <label class="form-label"
+                                                >提示词预览</label
+                                            >
+                                            <div
+                                                id="promptPreview"
+                                                class="alert alert-secondary"
+                                                style="
+                                                    white-space: pre-wrap;
+                                                    min-height: 60px;
+                                                "
+                                            ></div>
+                                        </div>
+
+                                        <button
+                                            id="generateBtn"
+                                            class="btn btn-primary w-100 mt-3"
+                                        >
+                                            生成图片
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 预览 -->
+                            <div class="col-lg-6">
+                                <div class="card">
+                                    <div class="card-header">生成预览</div>
+                                    <div
+                                        class="card-body preview-container"
+                                        id="generatedPreview"
+                                    >
+                                        <p class="text-muted">
+                                            点击“生成图片”后，预览将显示在此处。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 图片编辑 -->
+                    <div
+                        class="tab-pane fade"
+                        id="image-split"
+                        role="tabpanel"
+                        aria-labelledby="image-split-tab"
+                    >
+                        <!-- 在“图片编辑” Tab 的工具栏中 -->
+                        <div
+                            class="d-flex justify-content-between align-items-center mb-3"
+                        >
+                            <h5 class="mb-0">图片编辑</h5>
+                            <div class="d-flex gap-2">
+                                <!-- 新增：裁剪模式选择 -->
+                                <select
+                                    id="cropMode"
+                                    class="form-select form-select-sm"
+                                    style="width: auto"
+                                >
+                                    <option value="quadrants">四格裁剪</option>
+                                    <option value="free">自由裁剪</option>
+                                </select>
+                                <button
+                                    id="cropToQuadrantsBtn"
+                                    class="btn btn-success btn-sm me-2"
+                                    disabled
+                                >
+                                    裁剪
+                                </button>
+                                <button
+                                    id="swapFaceBtn"
+                                    class="btn btn-outline-primary btn-sm me-2"
+                                    disabled
+                                >
+                                    换脸
+                                </button>
+                                <button
+                                    id="saveCroppedImagesBtn"
+                                    class="btn btn-primary btn-sm"
+                                    disabled
+                                >
+                                    保存
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 编辑区域容器 -->
+                        <div
+                            id="imageEditContainer"
+                            class="position-relative border rounded bg-dark-subtle"
+                            style="width: 100%; height: 70vh"
+                        >
+                            <!-- 占位提示（初始显示） -->
+                            <div
+                                id="imageEditPlaceholder"
+                                class="d-flex justify-content-center align-items-center h-100 w-100 text-muted"
+                                style="position: absolute; inset: 0; z-index: 1"
+                            >
+                                请拖入一张图片以开始编辑
+                            </div>
+
+                            <!-- Canvas（始终存在，但初始无内容） -->
+                            <canvas
+                                id="editCanvas"
+                                class="w-100 h-100"
+                                style="display: block; background: #121212"
+                            ></canvas>
+
+                            <!-- 隐藏的图片加载器 -->
+                            <img
+                                id="hiddenImageLoader"
+                                style="display: none"
+                                crossorigin="anonymous"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- 故事板 -->
+                    <div
+                        class="tab-pane fade"
+                        id="storyboard"
+                        role="tabpanel"
+                        aria-labelledby="storyboard-tab"
+                    >
+                        <!-- 顶部工具栏 -->
+                        <div
+                            class="d-flex justify-content-between align-items-center mb-3"
+                        >
+                            <div class="d-flex align-items-center gap-2 mb-0">
+                                <!-- 可编辑标题 -->
+                                <div
+                                    class="storyboard-title-container d-flex align-items-center"
+                                >
+                                    <div
+                                        class="storyboard-title-display d-flex align-items-center"
+                                    >
+                                        <span id="storyboardTitleText"
+                                            >未命名故事板</span
+                                        >
+                                        <button
+                                            id="editTitleBtn"
+                                            class="btn btn-link text-light p-0 ms-2"
+                                            style="
+                                                font-size: 0.9em;
+                                                opacity: 0.6;
+                                            "
+                                            title="重命名"
+                                        >
+                                            ✏️
+                                        </button>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        id="storyboardTitleInput"
+                                        class="form-control form-control-sm d-none"
+                                        value="未命名故事板"
+                                        style="
+                                            width: auto;
+                                            min-width: 120px;
+                                            display: inline-block;
+                                        "
+                                    />
+                                </div>
+                                <!-- 下拉按钮 -->
+                                <div class="dropdown">
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        type="button"
+                                        id="storyboardDropdownBtn"
+                                        data-bs-toggle="dropdown"
+                                        aria-expanded="false"
+                                        style="padding: 0.25rem 0.5rem"
+                                    >
+                                        ▼
+                                    </button>
+                                    <ul
+                                        class="dropdown-menu dropdown-menu-end"
+                                        aria-labelledby="storyboardDropdownBtn"
+                                        id="storyboardDropdownMenu"
+                                    >
+                                        <li>
+                                            <a
+                                                class="dropdown-item"
+                                                href="#"
+                                                data-action="new"
+                                                >🆕 新建故事板</a
+                                            >
+                                        </li>
+                                        <li><hr class="dropdown-divider" /></li>
+                                        <!-- 动态故事板列表将插入到这里 -->
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button
+                                    id="addStoryboardPanelBtn"
+                                    class="btn btn-outline-info btn-sm"
+                                >
+                                    + 添加分镜
+                                </button>
+                                <button
+                                    id="saveStoryboardBtn"
+                                    class="btn btn-primary btn-sm"
+                                    disabled
+                                >
+                                    保存
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 拖入提示 / 面板容器（不变） -->
+                        <div
+                            id="storyboardPlaceholder"
+                            class="d-flex justify-content-center align-items-center text-muted py-5"
+                            style="min-height: 300px"
+                        >
+                            🎞️ 添加分镜，或从下拉菜单选择故事板
+                        </div>
+                        <div
+                            id="storyboardPanels"
+                            class="row g-3"
+                            style="display: none"
+                        ></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 全局提示容器 -->
+        <div
+            id="globalToastContainer"
+            class="position-fixed top-0 end-0 p-3"
+            style="z-index: 1055; pointer-events: none"
+        >
+            <!-- 动态 toast 将被插入到这里 -->
+        </div>
+
+        <!-- 全屏遮罩（用于换脸等耗时操作） -->
+        <div
+            id="fullscreenMask"
+            class="position-fixed top-0 start-0 w-100 h-100 d-none"
+            style="
+                background-color: rgba(0, 0, 0, 0.5);
+                z-index: 1050;
+                display: none;
+            "
+        >
+            <div class="d-flex justify-content-center align-items-center h-100">
+                <div class="text-light text-center">
+                    <div
+                        class="spinner-border text-light mb-2"
+                        role="status"
+                    ></div>
+                    <div>正在处理换脸，请稍候...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 快捷访问窗口 -->
+        <div id="quickAccessWindow" class="floating-window d-none">
+            <div class="floating-header">
+                <span>快捷访问</span>
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-dismiss="quick-access"
+                ></button>
+            </div>
+            <div class="quick-images-container"></div>
+        </div>
+
+        <!-- 历史记录窗口 -->
+        <div id="historyWindow" class="floating-window d-none">
+            <div class="floating-header">
+                <span>历史记录</span>
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-dismiss="history-window"
+                ></button>
+            </div>
+            <div class="history-content">
+                <div id="historyWindowList" class="row"></div>
+                <nav aria-label="历史翻页" class="mt-2">
+                    <ul
+                        class="pagination justify-content-center"
+                        id="historyWindowPagination"
+                    ></ul>
+                </nav>
+            </div>
+        </div>
+
+        <!-- 图片详情Modal -->
+        <div id="historyDetailModal" class="modal fade" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content bg-dark text-light">
+                    <div class="modal-header">
+                        <h5 class="modal-title">历史记录详情</h5>
+                        <button
+                            type="button"
+                            class="btn-close"
+                            data-bs-dismiss="modal"
+                        ></button>
+                    </div>
+                    <div class="modal-body"></div>
+                    <div class="modal-footer"></div>
+                </div>
+            </div>
+        </div>
+
+        <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.4/js/lightbox.min.js"></script>
+        <script src="{{ url_for('static', filename='state.js') }}"></script>
+        <script src="{{ url_for('static', filename='upload.js') }}"></script>
+        <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit.js') }}"></script>
+        <script src="{{ url_for('static', filename='storyboard.js') }}"></script>
+        <script src="{{ url_for('static', filename='main.js') }}"></script>
+    </body>
+</html>
+
+
+---------------------
+main.js 内容如下
+--------------------
+// main.js
+//
+
+(function () {
+  const state = window.AIImageState;
+  const ITEMS_PER_PAGE = 12;
+
+  // ===== 提示词预览 =====
+  function updatePromptPreview() {
+    let text = "";
+    if ($("#modeRaw").is(":checked")) {
+      text = $("#promptRaw").val();
+    } else if ($("#modeStoryboard").is(":checked")) {
+      const pre = $("#prePrompt").val();
+      const style = $("#style").val();
+      const s1 = $("#shot1").val();
+      const s2 = $("#shot2").val();
+      const s3 = $("#shot3").val();
+      const s4 = $("#shot4").val();
+      text = `${pre}，生成四格分镜（${style}）：\n分镜一：${s1}\n分镜二：${s2}\n分镜三：${s3}\n分镜四：${s4}`;
+    } else if ($("#modeCharacter").is(":checked")) {
+      // 角色模式逻辑
+      const views = [];
+      if ($("#viewFront").is(":checked")) views.push("正面全身");
+      if ($("#viewSide").is(":checked")) views.push("侧面全身");
+      if ($("#viewBack").is(":checked")) views.push("背面全身");
+      if ($("#viewFace").is(":checked")) views.push("面部特写");
+      if ($("#viewSolidBg").is(":checked")) views.push("纯色背景");
+
+      if (views.length === 0) {
+        text = "（请至少选择一个视角）";
+      } else {
+        const viewText = views.join("和");
+        const notes = $("#characterNotes").val().trim();
+        text = `给我一个这个角色的${viewText}。要求角色面部特征保持一致。${notes ? " " + notes : ""}`;
+      }
+    }
+    $("#promptPreview").text(text || "（提示词为空）");
+  }
+
+  // ===== 生成图片 =====
+  let isGenerating = false;
+  $("#generateBtn").click(function () {
+    if (isGenerating) return;
+    const prompt = $("#promptPreview").text().trim();
+    if (!prompt || prompt === "（提示词为空）") {
+      alert("请填写提示词");
+      return;
+    }
+
+    isGenerating = true;
+    $(this).prop("disabled", true).text("生成中...");
+
+    $.ajax({
+      url: "/generate",
+      method: "POST",
+      contentType: "application/json",
+      data: JSON.stringify({
+        image_urls: state.getUploadedUrls(),
+        local_input_paths: state.getLocalPaths(),
+        prompt: prompt,
+        size: $("#resolution").val(),
+        aspect_ratio: $("#aspectRatio").val(),
+      }),
+      success: function (res) {
+        if (res.success) {
+          let html = "";
+          res.result_urls.forEach((url) => {
+            html += `
+                            <div class="mb-3">
+                                <a href="${url}" data-lightbox="generated"><img src="${url}" class="img-fluid rounded" style="max-height:300px;"></a>
+                                <div class="mt-2">
+                                    <a href="${url}" download class="btn btn-sm btn-outline-light">下载</a>
+                                </div>
+                            </div>
+                        `;
+          });
+          $("#generatedPreview").html(html);
+          loadHistoryPage(1);
+        } else {
+          alert("生成失败: " + (res.error || "未知错误"));
+        }
+      },
+      error: function (xhr) {
+        const err = xhr.responseJSON?.error || "请求失败";
+        alert("生成错误: " + err);
+      },
+      complete: function () {
+        isGenerating = false;
+        $("#generateBtn").prop("disabled", false).text("生成图片");
+      },
+    });
+  });
+
+  // ===== 历史记录 =====
+  function showParamsModal(item) {
+    let inputHtml = "";
+    if (item.input_paths && item.input_paths.length > 0) {
+      inputHtml = '<h5>输入参考图：</h5><div class="d-flex flex-wrap gap-2">';
+      item.input_paths.forEach((url) => {
+        inputHtml += `<a href="${url}" data-lightbox="inputs-${item.id}"><img src="${url}" style="width:60px;height:60px;object-fit:cover;"></a>`;
+      });
+      inputHtml += "</div>";
+    }
+
+    const modalHtml = `
+            <div class="modal fade" id="paramsModal" tabindex="-1">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content bg-dark text-light">
+                        <div class="modal-header">
+                            <h5 class="modal-title">生成参数</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p><strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}</p>
+                            <p><strong>分辨率：</strong>${item.params.size}</p>
+                            <p><strong>长宽比：</strong>${item.params.aspect_ratio}</p>
+                            <p><strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}</p>
+                            ${inputHtml}
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    $("#historyList").append(modalHtml);
+    const modal = new bootstrap.Modal(document.getElementById("paramsModal"));
+    modal.show();
+    $("#paramsModal").on("hidden.bs.modal", function () {
+      $(this).remove();
+    });
+  }
+
+  /**
+   * 将指定图片载入“图片编辑”标签页并激活
+   * @param {Object} item - 包含 localPath 或 remoteUrl 的对象
+   */
+  function enterImageEditMode(item) {
+    // 1. 切换到“图片编辑”标签
+    const editTabBtn = document.querySelector("#image-split-tab");
+    if (editTabBtn) {
+      const tab = new bootstrap.Tab(editTabBtn);
+      tab.show();
+    }
+
+    // 2. 优先使用本地路径（localPath），没有则用远程 URL（remoteUrl）
+    const imgUrl = item.localPath || item.remoteUrl;
+    if (!imgUrl) {
+      console.warn("No image URL to edit", item);
+      return;
+    }
+
+    // 3. 触发图片加载（与 drag-drop 逻辑一致）
+    $("#hiddenImageLoader").attr("src", imgUrl);
+    $("#imageEditPlaceholder").hide();
+  }
+
+  function loadHistoryPage(page) {
+    $.get(
+      "/history?page=" + page + "&limit=" + ITEMS_PER_PAGE,
+      function (data) {
+        let html = "";
+        data.records.forEach((item) => {
+          const url = item.result_paths[0] || "";
+          html += `
+            <div class="col-6 col-sm-4 col-md-2 mb-3">
+              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                <a href="javascript:void(0);" class="history-img-link">
+                  <img src="${url}" class="w-100 history-img" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                </a>
+              </div>
+            </div>
+          `;
+        });
+        $("#historyList").html(html);
+
+        let pg = "";
+        for (let i = 1; i <= data.pages; i++) {
+          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
+        }
+        $("#historyPagination").html(pg);
+
+        // ✅ 仅在 shouldHighlightNewRecords 为 true 时执行高亮和滚动
+        if (shouldHighlightNewRecords) {
+          shouldHighlightNewRecords = false; // 重置标志，只触发一次
+
+          const cards = document.querySelectorAll("#quick-gen .history-card");
+          const count = Math.min(4, cards.length);
+
+          // 高亮前 4 张
+          for (let i = 0; i < count; i++) {
+            const card = cards[i];
+            card.style.transition = "background-color 1.5s ease";
+            card.style.backgroundColor = "#ffeb3b";
+
+            setTimeout(() => {
+              card.style.backgroundColor = "";
+            }, 1500);
+          }
+
+          // 滚动到 #quick-gen 容器底部（或 historyList 底部）
+          const quickGenContainer = document.getElementById("quick-gen");
+          if (quickGenContainer) {
+            // 使用 smooth 滚动到底部
+            quickGenContainer.scrollIntoView({
+              behavior: "smooth",
+              block: "end",
+            });
+            // 或者如果你希望滚动的是整个页面到底部（取决于布局）：
+            // window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+          }
+        }
+      },
+    );
+  }
+
+  // ===== 事件绑定 =====
+  $(document).ready(function () {
+    // 模式切换
+    $('input[name="mode"]').change(function () {
+      $("#rawSection").toggle(this.value === "raw");
+      $("#storyboardSection").toggle(this.value === "storyboard");
+      $("#characterSection").toggle(this.value === "character");
+      updatePromptPreview();
+    });
+
+    $(
+      "#promptRaw, #prePrompt, #style, #shot1, #shot2, #shot3, #shot4, #characterNotes",
+    ).on("input", updatePromptPreview);
+
+    // 复选框变化也要触发预览更新
+    $("#characterSection input[type='checkbox']").on(
+      "change",
+      updatePromptPreview,
+    );
+
+    $(document).on("click", "#historyPagination .page-link", function (e) {
+      e.preventDefault();
+      loadHistoryPage(parseInt($(this).text()));
+    });
+
+    // 初始化
+    updatePromptPreview();
+    loadHistoryPage(1);
+
+    // 如果你希望在切换标签时执行某些 JS 逻辑（例如懒加载、初始化组件等），可以监听 Bootstrap 的 shown.bs.tab 事件：
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
+      tab.addEventListener("shown.bs.tab", (event) => {
+        const targetId = event.target.getAttribute("data-bs-target");
+        console.log("切换到标签:", targetId);
+      });
+    });
+
+    // ===== 拖拽到目标区域逻辑 =====
+
+    // 监听 dragend（取消）
+    $(document).on("dragend dragcancel", "*", function () {
+      cleanupDragState();
+    });
+
+    // 点击历史卡片，弹出详情浮窗
+    $(document).on("click", ".history-card", function (e) {
+      const item = $(this).data("item");
+      showHistoryDetailModal(item);
+    });
+
+    function showHistoryDetailModal(item) {
+      const isFromQuick = item.id?.startsWith("quick-");
+      const resultUrl = item.result_paths[0] || item.result_urls[0] || "";
+
+      const hideUseParams =
+        item.params.prompt === "free crop" ||
+        item.params.prompt === "quadrants crop";
+
+      // 构建内容（和原来一样，但不再包含外层 modal 结构）
+      const deleteBtn = isFromQuick
+        ? ""
+        : `<button type="button" class="btn btn-outline-danger btn-sm" id="deleteHistoryBtn" data-id="${item.id}">删除</button>`;
+
+      const useParamsBtn = hideUseParams
+        ? ""
+        : `<button type="button" class="btn btn-outline-primary" id="useParamsBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>复刻</button>`;
+
+      let paramsText = "";
+      if (!hideUseParams) {
+        paramsText = `
+          <strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}<br>
+          <strong>分辨率：</strong>${item.params.size}<br>
+          <strong>长宽比：</strong>${item.params.aspect_ratio}<br>
+          <strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}
+        `;
+      }
+
+      let inputHtml = "";
+      if (item.input_paths && item.input_paths.length > 0) {
+        inputHtml =
+          '<h5 class="mt-3">输入参考图：</h5><div class="d-flex flex-wrap gap-2">';
+        item.input_paths.forEach((url) => {
+          inputHtml += `<img src="${url}" style="width:50px;height:50px;object-fit:cover;">`;
+        });
+        inputHtml += "</div>";
+      }
+
+      // 更新模态框内容
+      const $modal = $("#historyDetailModal");
+      $modal.find(".modal-body").html(`
+        <div class="text-center mb-3">
+          <a href="${resultUrl}" data-lightbox="history-detail">
+            <img src="${resultUrl}" class="img-fluid rounded" style="max-height:400px;">
+          </a>
+        </div>
+        ${paramsText}
+        ${inputHtml}
+      `);
+
+      $modal.find(".modal-footer").html(`
+        ${deleteBtn}
+        <button type="button" class="btn btn-outline-info" id="editHistoryBtn" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>编辑</button>
+        ${useParamsBtn}
+        <button type="button" class="btn btn-outline-success" id="useAsReferenceBtn"
+          data-local="${resultUrl}"
+          data-remote="${resultUrl}"
+          data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+          作为参考图
+        </button>
+      `);
+
+      // 初始化或获取已有的 Modal 实例（推荐缓存，但简单场景可每次都 new）
+      const modalInstance = bootstrap.Modal.getOrCreateInstance($modal[0]);
+      modalInstance.show();
+    }
+    // 暴露方法到全局
+    window.showHistoryDetailModal = showHistoryDetailModal;
+
+    // 使用参数（复用原有逻辑）
+    $(document).on("click", "#useParamsBtn", function () {
+      const item = $(this).data("item");
+      // === 以下复用你原有的“使用参数”逻辑 ===
+      const params = item.params;
+
+      // 判断模式（Raw / Storyboard / Character）
+      let isCharacter = params.prompt.includes("面部特征保持一致");
+      let isStoryboard = params.prompt.includes("生成四格分镜");
+
+      if (isCharacter) {
+        $("#modeCharacter").prop("checked", true).trigger("change");
+        // 清空复选框
+        $("#characterSection input[type='checkbox']").prop("checked", false);
+        const prompt = params.prompt;
+        if (prompt.includes("正面全身")) $("#viewFront").prop("checked", true);
+        if (prompt.includes("侧面全身")) $("#viewSide").prop("checked", true);
+        if (prompt.includes("背面全身")) $("#viewBack").prop("checked", true);
+        if (prompt.includes("面部特写")) $("#viewFace").prop("checked", true);
+        if (prompt.includes("纯色背景"))
+          $("#viewSolidBg").prop("checked", true);
+
+        const notesMatch = prompt.match(/面部特征保持一致\。（.*?）?$/);
+        $("#characterNotes").val(notesMatch ? notesMatch[1] || "" : "");
+      } else if (isStoryboard) {
+        $("#modeStoryboard").prop("checked", true).trigger("change");
+        const lines = params.prompt.split("\n");
+        const preMatch = lines[0]?.match(/^(.+)，生成四格分镜/);
+        $("#prePrompt").val(preMatch ? preMatch[1] : "");
+        const styleMatch = lines[0]?.match(/生成四格分镜（(.+?)）/);
+        $("#style").val(styleMatch ? styleMatch[1] : "");
+        $("#shot1").val(lines[1]?.replace("分镜一：", "") || "");
+        $("#shot2").val(lines[2]?.replace("分镜二：", "") || "");
+        $("#shot3").val(lines[3]?.replace("分镜三：", "") || "");
+        $("#shot4").val(lines[4]?.replace("分镜四：", "") || "");
+      } else {
+        $("#modeRaw").prop("checked", true).trigger("change");
+        $("#promptRaw").val(params.prompt);
+      }
+
+      $("#resolution").val(params.size || "2K");
+      $("#aspectRatio").val(params.aspect_ratio || "auto");
+
+      // 恢复参考图
+      state.clear();
+      if (item.input_paths && item.input_paths.length > 0) {
+        state.setFromUrls(item.input_urls, item.input_paths);
+      }
+      if (typeof window.UploadModule?.renderPreview === "function") {
+        window.UploadModule.renderPreview();
+      }
+
+      updatePromptPreview();
+      $("html, body").animate({ scrollTop: 0 }, 300);
+
+      // 关闭浮窗
+      bootstrap.Modal.getInstance(
+        document.getElementById("historyDetailModal"),
+      )?.hide();
+    });
+
+    // 删除记录
+    $(document).on("click", "#deleteHistoryBtn", function () {
+      const recordId = $(this).data("id");
+      if (!confirm("确定要删除这条历史记录吗？")) return;
+
+      $.ajax({
+        url: `/history/${recordId}`,
+        method: "DELETE",
+        success: function (res) {
+          if (res.success) {
+            // 关闭浮窗
+            bootstrap.Modal.getInstance(
+              document.getElementById("historyDetailModal"),
+            )?.hide();
+            // 重新加载当前页
+            const currentPage =
+              parseInt(
+                $("#historyPagination .page-item.active .page-link").text(),
+              ) || 1;
+            loadHistoryPage(currentPage);
+          } else {
+            alert("删除失败: " + (res.error || "未知错误"));
+          }
+        },
+        error: function () {
+          alert("删除请求失败");
+        },
+      });
+    });
+
+    // 编辑按钮
+    $(document).on("click", "#editHistoryBtn", function () {
+      const item = $(this).data("item");
+
+      // 构造与拖拽逻辑一致的 item 结构：{ localPath, remoteUrl }
+      const editItem = {
+        localPath: item.result_paths?.[0] || item.result_urls?.[0], // 优先本地路径
+        remoteUrl: item.result_urls?.[0],
+      };
+
+      enterImageEditMode(editItem);
+
+      // 关闭浮窗
+      bootstrap.Modal.getInstance(
+        document.getElementById("historyDetailModal"),
+      )?.hide();
+    });
+
+    // 新增：作为参考图
+    $(document).on("click", "#useAsReferenceBtn", async function () {
+      const localPath = $(this).data("local");
+      const remoteUrl = $(this).data("remote");
+      const item = $(this).data("item");
+
+      let usableLocal = localPath;
+      let usableRemote = remoteUrl;
+
+      // 若没有有效的 ImgBB 远程地址，先上传
+      if (!usableRemote || !usableRemote.startsWith("https://")) {
+        if (!usableLocal) {
+          alert("无法获取图片源，无法作为参考图");
+          return;
+        }
+
+        try {
+          const resp = await fetch(usableLocal);
+          if (!resp.ok) throw new Error("无法读取本地图片");
+          const blob = await resp.blob();
+          const formData = new FormData();
+          formData.append("file", blob, "reference.jpg");
+
+          const uploadRes = await fetch("/quick-upload", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!uploadRes.ok) throw new Error("上传失败");
+          const data = await uploadRes.json();
+          usableRemote = data.url;
+          usableLocal = data.local_path || usableLocal;
+        } catch (e) {
+          console.error("上传参考图失败:", e);
+          showToast("上传参考图失败，请重试", "error", 3000);
+          return;
+        }
+      }
+
+      // 加入参考图
+      const success = window.AIImageState?.addFromQuickAccess(
+        usableLocal,
+        usableRemote,
+      );
+      if (success) {
+        if (typeof window.UploadModule?.renderPreview === "function") {
+          window.UploadModule.renderPreview();
+        }
+        showToast("已添加为参考图", "success", 2000);
+        // 关闭模态框
+        bootstrap.Modal.getInstance(
+          document.getElementById("historyDetailModal"),
+        )?.hide();
+      } else {
+        showToast("参考图已存在或数量已达上限（最多10张）", "warning", 2500);
+      }
+    });
+
+    // ===== 工具条弹窗控制 =====
+    $(document).on("click", ".tool-btn", function () {
+      const target = $(this).data("target");
+      if (target === "quick-access") {
+        $("#quickAccessWindow").removeClass("d-none");
+        window.QuickAccess?.renderSidebar(
+          "#quickAccessWindow .quick-images-container",
+        );
+      } else if (target === "history-window") {
+        $("#historyWindow").removeClass("d-none");
+        loadHistoryWindowPage(1);
+      }
+    });
+
+    // 关闭窗口
+    $(document).on("click", "[data-dismiss]", function () {
+      const target = $(this).data("dismiss");
+      if (target === "quick-access") {
+        $("#quickAccessWindow").addClass("d-none");
+      } else if (target === "history-window") {
+        $("#historyWindow").addClass("d-none");
+      }
+    });
+
+    // 历史窗口分页
+    function loadHistoryWindowPage(page) {
+      const ITEMS_PER_PAGE = 12;
+      $.get(`/history?page=${page}&limit=${ITEMS_PER_PAGE}`, function (data) {
+        let html = "";
+        data.records.forEach((item) => {
+          const url = item.result_paths[0] || "";
+          // 替换原 img 标签
+          html += `
+            <div class="col-6 col-sm-4 col-md-3 mb-3">
+              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+                <a href="javascript:void(0);">
+                  <img
+                    src="${url}"
+                    class="w-100"
+                    style="aspect-ratio:1/1;object-fit:cover;"
+                    draggable="true"
+                    data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'
+                  >
+                </a>
+              </div>
+            </div>
+          `;
+        });
+        $("#historyWindowList").html(html);
+        let pg = "";
+        for (let i = 1; i <= data.pages; i++) {
+          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
+        }
+        $("#historyWindowPagination").html(pg);
+      });
+    }
+
+    $(document).on(
+      "click",
+      "#historyWindowPagination .page-link",
+      function (e) {
+        e.preventDefault();
+        loadHistoryWindowPage(parseInt($(this).text()));
+      },
+    );
+
+    // 历史窗口卡片点击
+    $(document).on("click", "#historyWindowList .history-card", function () {
+      const item = $(this).data("item");
+      window.showHistoryDetailModal(item);
+    });
+
+    // ===== 拖拽移动浮动窗口 =====
+    function makeWindowDraggable(windowSelector) {
+      const winEl = document.querySelector(windowSelector); // ← 改名：winEl
+      if (!winEl) return;
+
+      let pos1 = 0,
+        pos2 = 0,
+        pos3 = 0,
+        pos4 = 0;
+
+      const header = winEl.querySelector(".floating-header");
+      if (!header) return;
+
+      header.style.cursor = "move";
+
+      header.onmousedown = dragMouseDown;
+
+      function dragMouseDown(e) {
+        e.preventDefault();
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+      }
+
+      function elementDrag(e) {
+        e.preventDefault();
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+
+        // ✅ 正确计算新位置
+        const newLeft = winEl.offsetLeft - pos1;
+        const newTop = winEl.offsetTop - pos2;
+
+        // ✅ 使用全局 window.innerWidth/Height（注意：不是 winEl.innerWidth！）
+        const maxX = window.innerWidth - winEl.offsetWidth;
+        const maxY = window.innerHeight - winEl.offsetHeight;
+
+        // ✅ 限制边界
+        winEl.style.left = Math.max(0, Math.min(newLeft, maxX)) + "px";
+        winEl.style.top = Math.max(0, Math.min(newTop, maxY)) + "px";
+
+        // ✅ 移除 transform（确保定位基于 left/top）
+        winEl.style.transform = "none";
+      }
+
+      function closeDragElement() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+      }
+    }
+
+    // 初始化拖拽
+    makeWindowDraggable("#quickAccessWindow");
+    makeWindowDraggable("#historyWindow");
+
+    // ===== 悬浮窗口图片拖拽支持 =====
+    $(document).on(
+      "dragstart",
+      "#historyWindow .history-card img, #quickAccessWindow .quick-img-item img",
+      function (e) {
+        const originalEvent = e.originalEvent;
+        let itemData = null;
+
+        // 来源：历史记录
+        if ($(this).closest("#historyWindow").length) {
+          const item = $(this).data("history-item");
+          if (item) {
+            itemData = {
+              type: "history",
+              localPath: item.result_paths?.[0] || "",
+              remoteUrl: item.result_urls?.[0] || "",
+              inputPaths: item.input_paths || [],
+              inputUrls: item.input_urls || [],
+              params: item.params || {},
+            };
+          }
+        }
+        // 来源：快捷访问
+        else if ($(this).closest("#quickAccessWindow").length) {
+          const item = $(this).data("quick-item");
+          if (item) {
+            itemData = {
+              type: "quick",
+              localPath: item.localPath,
+              remoteUrl: item.remoteUrl,
+              category: item.category,
+              group: item.group,
+              viewType: item.viewType,
+              note: item.note,
+            };
+          }
+        }
+
+        if (itemData) {
+          // 存储到全局（供 drop 区域读取）
+          window.__draggedItem = itemData;
+
+          // 设置拖影
+          const img = this.cloneNode(true);
+          img.style.width = "80px";
+          img.style.height = "80px";
+          img.style.opacity = "0.9";
+          img.style.borderRadius = "4px";
+          img.style.objectFit = "cover";
+          img.style.pointerEvents = "none";
+          const ghost = document.createElement("div");
+          ghost.appendChild(img);
+          ghost.style.position = "absolute";
+          ghost.style.top = "-9999px";
+          document.body.appendChild(ghost);
+          originalEvent.dataTransfer.setDragImage(ghost, 40, 40);
+
+          // 清理
+          const cleanup = () => {
+            if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+            document.removeEventListener("dragend", cleanup);
+          };
+          document.addEventListener("dragend", cleanup);
+
+          // 不显示 #dragTargetOverlay（你已移除，所以跳过）
+          return;
+        }
+      },
+    );
+
+    // 快捷访问窗口接收历史图
+    $(document).on(
+      "dragover",
+      "#quickAccessWindow .quick-images-container",
+      function (e) {
+        e.preventDefault();
+      },
+    );
+    $(document).on(
+      "drop",
+      "#quickAccessWindow .quick-images-container",
+      function (e) {
+        e.preventDefault();
+        const item = window.__draggedItem;
+        if (item && item.type === "history") {
+          // 提取主图
+          const imgToAdd = {
+            localPath: item.localPath,
+            remoteUrl: item.remoteUrl,
+          };
+          window.QuickAccess?.addImage(imgToAdd);
+          showToast("已添加到快捷访问", "success", 2000);
+        }
+        window.__draggedItem = null;
+      },
+    );
+
+    // document ready 结束
+  });
+})();
+
+
+---------------------
+quick-access.js 内容如下
+--------------------
+// static/quick-access.js
+window.QuickAccess = (function () {
+  const STORAGE_KEY = "quickAccessImages";
+  let images = [];
+  let currentFilter = "all"; // "all", "角色", "场景"
+
+  function load() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      images = saved ? JSON.parse(saved) : [];
+      images.forEach((img) => {
+        // 迁移老数据
+        if (img.tag && img.tag !== "全部") {
+          // 老 tag → category
+          img.category = img.tag;
+          img.group = img.title || img.tag;
+          delete img.tag;
+          delete img.title;
+        } else if (!img.category) {
+          // 未分类：把 title 作为 group
+          img.category = null;
+          img.group = img.title || "";
+          delete img.tag;
+          delete img.title;
+        }
+        if (!img.addedAt) img.addedAt = new Date().toISOString();
+      });
+    } catch (e) {
+      images = [];
+    }
+  }
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(images));
+  }
+
+  async function addImage({ localPath, remoteUrl }) {
+    console.log([localPath, remoteUrl]);
+    if (!localPath && !remoteUrl) return;
+
+    const exists = images.some(
+      (img) =>
+        (img.remoteUrl === remoteUrl && remoteUrl) ||
+        (img.localPath === localPath && localPath),
+    );
+    if (exists) return;
+
+    let usableLocal = localPath;
+    let usableRemote = remoteUrl;
+    if (usableRemote && !usableRemote.startsWith("https://")) {
+      usableRemote = null;
+    }
+
+    if (usableLocal && !usableRemote) {
+      try {
+        const resp = await fetch(usableLocal);
+        const blob = await resp.blob();
+        const formData = new FormData();
+        formData.append("file", blob, "quick.jpg");
+        const uploadRes = await fetch("/quick-upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (uploadRes.ok) {
+          const data = await uploadRes.json();
+          usableRemote = data.url;
+          usableLocal = data.local_path || usableLocal;
+        } else {
+          alert("上传至快捷访问失败");
+          return;
+        }
+      } catch (e) {
+        console.error("QuickAccess upload error:", e);
+        alert("上传失败，请重试");
+        return;
+      }
+    }
+
+    images.push({
+      localPath: usableLocal,
+      remoteUrl: usableRemote,
+      addedAt: new Date().toISOString(),
+      tag: "全部",
+      title: "", // ← 新增
+    });
+    save();
+    renderSidebar();
+  }
+
+  function setTitle(index, newTitle) {
+    if (images[index]) {
+      images[index].title = (newTitle || "").trim();
+      save();
+      renderSidebar();
+    }
+  }
+
+  function setTag(index, newTag) {
+    if (images[index]) {
+      images[index].tag = newTag;
+      save();
+      renderSidebar();
+    }
+  }
+
+  function removeImage(index) {
+    images.splice(index, 1);
+    save();
+    renderSidebar();
+  }
+
+  function setFilter(filter) {
+    currentFilter = filter;
+    renderSidebar();
+  }
+
+  // ===== 新增：显示添加/编辑弹窗 =====
+  function showAddQuickAccessModal(imgData = null) {
+    // imgData 用于编辑已有项
+    const isEditing = !!imgData;
+    const category = imgData?.category || "none";
+    const group = imgData?.group || "";
+    const viewType = imgData?.viewType || "";
+    const note = imgData?.note || "";
+
+    const modalId = "quickAccessDetailModal";
+    let html = `
+    <div class="modal fade" id="${modalId}" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header">
+            <h5 class="modal-title">${isEditing ? "图片信息" : "图片信息"}</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <!-- 分类选择 -->
+            <div class="mb-3">
+              <label class="form-label">分类</label>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaNone" value="none" ${category === "none" ? "checked" : ""}>
+                <label class="form-check-label" for="qaNone">不分类</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaChar" value="角色" ${category === "角色" ? "checked" : ""}>
+                <label class="form-check-label" for="qaChar">角色</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="qaCategory" id="qaScene" value="场景" ${category === "场景" ? "checked" : ""}>
+                <label class="form-check-label" for="qaScene">场景</label>
+              </div>
+            </div>
+
+            <!-- 动态字段容器 -->
+            <div id="qaDynamicFields"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-primary" id="qaSaveBtn">${isEditing ? "保存" : "添加"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    `;
+    // 替换原初始化代码
+    $("#quickAccessWindow").append(html);
+
+    const modalEl = document.getElementById(modalId);
+    if (!modalEl) {
+      console.log("not modal");
+      return;
+    }
+
+    // ✅ 关键修复：通过 data attribute 设置 backdrop
+    modalEl.setAttribute("data-bs-backdrop", "false");
+    modalEl.setAttribute("data-bs-keyboard", "true"); // 可选
+
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+
+    // 动态渲染字段
+    function renderDynamicFields() {
+      const cat = $('input[name="qaCategory"]:checked').val();
+      let fieldsHtml = "";
+
+      if (cat === "none") {
+        fieldsHtml = `
+          <div class="mb-3">
+            <label class="form-label">标题</label>
+            <input type="text" class="form-control" id="qaTitle" value="${group}">
+          </div>
+        `;
+      } else {
+        // 收集已有的 group 名字（去重）
+        const existingGroups = [
+          ...new Set(
+            images
+              .filter((img) => img.category === cat)
+              .map((img) => img.group)
+              .filter((g) => g && typeof g === "string"),
+          ),
+        ].sort();
+
+        // 构建选项
+        let optionsHtml = `<option value="">（请选择或输入新名字）</option>`;
+        existingGroups.forEach((g) => {
+          const selected = g === group ? "selected" : "";
+          optionsHtml += `<option value="${g}" ${selected}>${g}</option>`;
+        });
+        optionsHtml += `<option value="__new__" ${group && !existingGroups.includes(group) ? "selected" : ""}>其他（请输入）…</option>`;
+
+        const label = cat === "角色" ? "角色名字" : "场景名字";
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">${label}</label>
+            <select class="form-select" id="qaGroupSelect">
+              ${optionsHtml}
+            </select>
+            <input type="text" class="form-control mt-1 d-none" id="qaGroupInput" placeholder="输入新名字…" value="${group && !existingGroups.includes(group) ? group : ""}">
+          </div>
+        `;
+
+        // 视角下拉
+        const charViews = [
+          { value: "front_full", label: "正面全身" },
+          { value: "side_full", label: "侧面全身" },
+          { value: "back_full", label: "背面全身" },
+          { value: "face_closeup", label: "面部特写" },
+        ];
+        const sceneViews = [
+          { value: "wide_shot", label: "全景" },
+          { value: "medium_shot", label: "近景" },
+          { value: "birdseye", label: "俯视" },
+          { value: "wormseye", label: "仰视" },
+        ];
+        const views = cat === "角色" ? charViews : sceneViews;
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">视角</label>
+            <select class="form-select" id="qaViewType">
+              <option value="">（可选）</option>
+              ${views.map((v) => `<option value="${v.value}" ${viewType === v.value ? "selected" : ""}>${v.label}</option>`).join("")}
+            </select>
+          </div>
+        `;
+
+        // 备注
+        fieldsHtml += `
+          <div class="mb-3">
+            <label class="form-label">备注（可选）</label>
+            <input type="text" class="form-control" id="qaNote" placeholder="如：校服、雨天" value="${note}">
+          </div>
+        `;
+      }
+
+      $("#qaDynamicFields").html(fieldsHtml);
+
+      // 切换“其他…”时显示输入框
+      $("#qaGroupSelect")
+        .off("change")
+        .on("change", function () {
+          const val = $(this).val();
+          if (val === "__new__") {
+            $("#qaGroupInput").removeClass("d-none").focus();
+          } else {
+            $("#qaGroupInput").addClass("d-none");
+          }
+        });
+    }
+
+    // 初始渲染
+    renderDynamicFields();
+    $('input[name="qaCategory"]').on("change", renderDynamicFields);
+
+    // 保存逻辑
+    $("#qaSaveBtn").on("click", async () => {
+      const cat = $('input[name="qaCategory"]:checked').val();
+      let newImage = null;
+      if (cat === "none") {
+        const title = $("#qaTitle").val().trim();
+        if (!title) {
+          showToast("标题不能为空", "warning");
+          return;
+        }
+        newImage = {
+          category: null,
+          group: title, // 老 title 兼容字段
+          viewType: null,
+          note: null,
+          ...(imgData
+            ? {
+                localPath: imgData.localPath,
+                remoteUrl: imgData.remoteUrl,
+                addedAt: imgData.addedAt,
+              }
+            : {}),
+        };
+      } else {
+        let group;
+        const selectVal = $("#qaGroupSelect").val();
+        if (selectVal === "__new__") {
+          group = $("#qaGroupInput").val().trim();
+        } else {
+          group = selectVal;
+        }
+        if (!group) {
+          showToast(`${cat}名字不能为空`, "warning");
+          return;
+        }
+        newImage = {
+          category: cat,
+          group: group,
+          viewType: $("#qaViewType").val() || null,
+          note: $("#qaNote").val().trim() || null,
+          ...(imgData
+            ? {
+                localPath: imgData.localPath,
+                remoteUrl: imgData.remoteUrl,
+                addedAt: imgData.addedAt,
+              }
+            : {}),
+        };
+      }
+
+      if (!isEditing) {
+        // 新增：需传入图片路径
+        if (!window.__currentQuickAddImage) {
+          showToast("图片信息缺失", "error");
+          return;
+        }
+        newImage.localPath = window.__currentQuickAddImage.localPath;
+        newImage.remoteUrl = window.__currentQuickAddImage.remoteUrl;
+        newImage.addedAt = new Date().toISOString();
+        images.push(newImage);
+      } else {
+        // 编辑：替换原数据
+        const idx = images.findIndex(
+          (i) =>
+            i.localPath === imgData.localPath &&
+            i.remoteUrl === imgData.remoteUrl,
+        );
+        if (idx !== -1) images[idx] = newImage;
+      }
+
+      save();
+      renderSidebar();
+      modal.hide();
+    });
+
+    // 删除（仅编辑时）
+    if (isEditing) {
+      $("#qaDeleteBtn").on("click", () => {
+        if (confirm("确定删除？")) {
+          const idx = images.findIndex(
+            (i) =>
+              i.localPath === imgData.localPath &&
+              i.remoteUrl === imgData.remoteUrl,
+          );
+          if (idx !== -1) images.splice(idx, 1);
+          save();
+          renderSidebar();
+          modal.hide();
+        }
+      });
+    }
+
+    // 自动清理
+    $(`#${modalId}`).on("hidden.bs.modal", () => $(`#${modalId}`).remove());
+  }
+
+  // 辅助函数
+  function getViewTypeLabel(key) {
+    const map = {
+      front_full: "正面全身",
+      side_full: "侧面全身",
+      back_full: "背面全身",
+      face_closeup: "面部特写",
+      wide_shot: "全景",
+      medium_shot: "近景",
+      birdseye: "俯视",
+      wormseye: "仰视",
+    };
+    return map[key] || "";
+  }
+
+  function buildQuickImgItem(img, title) {
+    const originalIndex = images.findIndex(
+      (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
+    );
+    const titleDisplay = title
+      ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
+      : "";
+    return `
+    <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
+         style="width:120px;height:120px;cursor:pointer;" title="${title || "点击加入参考图"}">
+      <img draggable="true" src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
+      ${titleDisplay}
+      <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
+        <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
+        <ul class="dropdown-menu p-1" style="font-size:12px;">
+          <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
+          <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
+        </ul>
+      </div>
+    </div>
+    `;
+  }
+
+  function renderSidebar(
+    containerSelector = "#quickAccessWindow .quick-images-container",
+  ) {
+    const $container = $(containerSelector);
+    if ($container.length === 0) return;
+
+    let $renderTarget;
+
+    // —————— 1. 确定渲染目标容器 ——————
+    $container.empty();
+    $renderTarget = $container;
+
+    // —————— 2. 渲染过滤器 ——————
+
+    let $filter = $renderTarget.find(".quick-filter");
+    if ($filter.length === 0) {
+      $filter = $(`
+          <div class="quick-filter d-flex gap-2 mb-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
+          </div>
+        `);
+      $renderTarget.append($filter);
+      $filter.on("click", ".filter-btn", function () {
+        const filter = $(this).data("filter");
+        setFilter(filter);
+        // $filter.find(".filter-btn").removeClass("active");
+        // $(this).addClass("active");
+      });
+      $filter
+        .find(`.filter-btn[data-filter="${currentFilter}"]`)
+        .addClass("active");
+    }
+
+    // —————— 3. 构建图像 HTML ——————
+    // 过滤图片
+    const filteredImages =
+      currentFilter === "all"
+        ? images
+        : images.filter((img) => img.category === currentFilter);
+
+    // 替换原 $container.html(html) 部分
+    // 先分类
+    const byCategory = {
+      角色: {},
+      场景: {},
+      未分类: [],
+    };
+
+    filteredImages.forEach((img) => {
+      if (img.category === "角色") {
+        if (!byCategory["角色"][img.group]) byCategory["角色"][img.group] = [];
+        byCategory["角色"][img.group].push(img);
+      } else if (img.category === "场景") {
+        if (!byCategory["场景"][img.group]) byCategory["场景"][img.group] = [];
+        byCategory["场景"][img.group].push(img);
+      } else {
+        byCategory["未分类"].push(img);
+      }
+    });
+
+    let html = "";
+
+    // 渲染角色
+    for (const [group, imgs] of Object.entries(byCategory["角色"])) {
+      html += `
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1">${group}</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
+      imgs.forEach((img) => {
+        const title =
+          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
+    // 渲染场景
+    for (const [group, imgs] of Object.entries(byCategory["场景"])) {
+      html += `
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1">${group}</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
+      imgs.forEach((img) => {
+        const title =
+          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
+    // 渲染未分类
+    if (byCategory["未分类"].length > 0) {
+      html += `
+            <div class="quick-group">
+              <h6 class="text-white mt-3 mb-1 text-secondary">未分类</h6>
+              <div class="d-flex flex-wrap gap-2">
+          `;
+      byCategory["未分类"].forEach((img) => {
+        const title = img.group || "";
+        html += buildQuickImgItem(img, title);
+      });
+      html += `</div></div>`;
+    }
+
+    // —————— 4. 插入 HTML ——————
+    // $renderTarget.html(html);
+    $renderTarget.append($(html));
+
+    // —————— 5. 绑定交互事件 ——————
+    const $target = $renderTarget;
+
+    // 点击预览
+    // 重新绑定事件（使用事件委托）
+    $target.off("click").on("click", ".quick-img-item", function (e) {
+      if ($(e.target).closest(".dropdown").length) return;
+
+      const $img = $(this).find("img");
+      const src = $img.attr("src");
+      const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
+
+      if (!img) return;
+
+      // 构造 fake item，兼容 showHistoryDetailModal
+      const fakeItem = {
+        id: "quick-" + Date.now(), // 无真实 ID，但用于唯一标识
+        result_paths: [img.localPath || ""],
+        result_urls: [img.remoteUrl || ""],
+        input_paths: [],
+        input_urls: [],
+        timestamp: img.addedAt || new Date().toISOString(),
+        params: {
+          prompt: "(来自快捷访问)",
+          size: "2K",
+          aspect_ratio: "auto",
+        },
+      };
+
+      // 调用全局模态框函数（需确保此函数在 window 作用域或可访问）
+      if (typeof window.showHistoryDetailModal === "function") {
+        window.showHistoryDetailModal(fakeItem);
+      } else {
+        // 兜底：直接加参考图（兼容旧版）
+        const success = window.AIImageState?.addFromQuickAccess(
+          img.localPath,
+          img.remoteUrl,
+        );
+        if (success && window.UploadModule?.renderPreview) {
+          window.UploadModule.renderPreview();
+        }
+      }
+    });
+
+    $target
+      .off("dragstart")
+      .on("dragstart", ".quick-img-item img", function (e) {
+        const $img = $(this);
+        const src = $img.attr("src");
+        const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
+        if (!img) return;
+
+        const itemData = {
+          localPath: img.localPath,
+          remoteUrl: img.remoteUrl,
+        };
+        window.__draggedItem = itemData;
+        window.__dragOrigin = "quick"; // 标记来源是快捷栏
+
+        const originalEvent = e.originalEvent;
+        const ghost = this.cloneNode(true);
+        ghost.style.width = "100px";
+        ghost.style.height = "100px";
+        ghost.style.opacity = "0.9";
+        ghost.style.borderRadius = "4px";
+        ghost.style.objectFit = "contain";
+        ghost.style.pointerEvents = "none";
+        const ghostDiv = document.createElement("div");
+        ghostDiv.appendChild(ghost);
+        ghostDiv.style.position = "absolute";
+        ghostDiv.style.top = "-9999px";
+        document.body.appendChild(ghostDiv);
+
+        originalEvent.dataTransfer.setDragImage(ghostDiv, 40, 40);
+
+        const cleanup = () => {
+          if (ghostDiv.parentNode) ghostDiv.parentNode.removeChild(ghostDiv);
+          document.removeEventListener("dragend", cleanup);
+        };
+        document.addEventListener("dragend", cleanup);
+
+        // 延迟显示拖拽目标，但排除“快捷访问”区域
+        setTimeout(() => {
+          $("#dragTargetOverlay").show();
+          // 隐藏快捷访问目标图标（如果是从快捷栏拖出）
+          if (window.__dragOrigin === "quick") {
+            $(`.drag-target-item[data-target="quick"]`).hide();
+          }
+        }, 100);
+      });
+
+    // 标签设置
+    $target
+      .off("click", ".quick-tag-btn")
+      .on("click", ".quick-tag-btn", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = $(this).data("index");
+        const tag = $(this).data("tag");
+        setTag(index, tag);
+      });
+
+    // 设置标题
+    // 替换原 .quick-title-btn 逻辑
+    $target
+      .off("click", ".quick-title-btn")
+      .on("click", ".quick-title-btn", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = $(this).data("index");
+        const img = images[index];
+        if (img) {
+          showAddQuickAccessModal(img); // ← 改为编辑模式
+        }
+      });
+
+    // 删除
+    $target
+      .off("click", ".quick-delete-btn")
+      .on("click", ".quick-delete-btn", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const index = $(this).data("index");
+        removeImage(index);
+      });
+
+    // 初始化 Bootstrap dropdown（如果未自动初始化）
+    if (typeof bootstrap !== "undefined" && bootstrap.Dropdown) {
+      $target.find('[data-bs-toggle="dropdown"]').each(function () {
+        new bootstrap.Dropdown(this);
+      });
+    }
+  }
+
+  load();
+  return {
+    addImage,
+    renderSidebar,
+    getImages: () => [...images],
+  };
+})();

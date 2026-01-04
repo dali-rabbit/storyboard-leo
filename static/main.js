@@ -431,9 +431,9 @@
           html += `
             <div class="col-6 col-sm-4 col-md-3 mb-3">
               <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                <a href="${url}">
+
                   <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
-                </a>
+
               </div>
             </div>
           `;

@@ -1,4 +1,635 @@
 ---------------------
+app.py 内容如下
+--------------------
+import base64
+import copy
+import json
+import os
+import shutil
+import tempfile
+import uuid
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+from threading import Lock
+
+import requests
+from dotenv import load_dotenv
+from flask import Flask, jsonify, render_template, request, send_from_directory
+from PIL import Image
+
+from plugins import get_face_swap_plugin
+from test_gen_api import generate_via_image_fallback
+from uploader import UploadError, upload_file
+
+load_dotenv()
+
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
+SESSION_KEY = os.getenv("SESSION_KEY")
+
+
+# 配置
+HISTORY_DIR = Path("history")
+HISTORY_DIR.mkdir(exist_ok=True)
+
+# 避免重复提交（简单任务锁）
+current_task_lock = Lock()
+is_generating = False
+
+# 保存输入图片
+INPUT_IMAGES_DIR = HISTORY_DIR / "inputs"
+INPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# 保存生成结果
+RESULTS_DIR = HISTORY_DIR / "results"
+RESULTS_DIR.mkdir(exist_ok=True)
+
+
+app = Flask(__name__)
+app.secret_key = SESSION_KEY  # 用于 session 安全
+
+
+def save_image_from_url(url: str, folder: Path) -> str:
+    """从 URL 下载图片，保存到 folder，返回本地相对路径（如 'results/abc.jpg'）"""
+    try:
+        resp = requests.get(url, stream=True, timeout=30)
+        if resp.status_code != 200:
+            raise Exception(f"HTTP {resp.status_code}")
+
+        # 推测文件扩展名
+        ext = ".jpg"  # 默认用 jpg
+        content_type = resp.headers.get("content-type", "")
+        if "png" in content_type:
+            ext = ".png"
+        elif "webp" in content_type:
+            ext = ".webp"
+
+        filename = str(uuid.uuid4()) + ext
+        filepath = folder / filename
+
+        with open(filepath, "wb") as f:
+            resp.raw.decode_content = True
+            shutil.copyfileobj(resp.raw, f)
+
+        # 强制转为 JPG（统一格式）
+        if ext != ".jpg":
+            from PIL import Image
+
+            img = Image.open(filepath).convert("RGB")
+            jpg_path = filepath.with_suffix(".jpg")
+            img.save(jpg_path, "JPEG", quality=92)
+            filepath.unlink()  # 删除原文件
+            filepath = jpg_path
+
+        return str(filepath.relative_to(Path(".")))  # 如 "history/inputs/xxx.jpg"
+    except Exception as e:
+        print(f"[Save Image Error] {url} -> {e}")
+        return None
+
+
+def save_uploaded_file_as_jpg(file_storage, folder: Path) -> str:
+    """将 Flask 上传的 file 保存为 JPG（PNG 自动转）"""
+    try:
+        filename = str(uuid.uuid4()) + ".jpg"
+        temp_path = folder / filename
+
+        # 若是 PNG，用 PIL 转 JPG（带白底）
+        if file_storage.filename.lower().endswith(".png"):
+            from PIL import Image
+
+            img = Image.open(file_storage.stream).convert("RGBA")
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+            background.save(temp_path, "JPEG", quality=92)
+        else:
+            # 直接保存为 JPG（即使原为 JPG/JPEG）
+            from PIL import Image
+
+            img = Image.open(file_storage.stream).convert("RGB")
+            img.save(temp_path, "JPEG", quality=92)
+
+        return str(temp_path.relative_to(Path(".")))
+    except Exception as e:
+        print(f"[Save Uploaded File Error] {e}")
+        return None
+
+
+@app.route("/history/<path:filename>")
+def history_files(filename):
+    return send_from_directory(HISTORY_DIR, filename)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/upload-images", methods=["POST"])
+def upload_images():
+    files = request.files.getlist("images")
+    if not files:
+        return jsonify({"error": "No images provided"}), 400
+
+    external_urls = []
+    local_paths = []
+
+    for file in files[:10]:
+        if not file.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            continue
+
+        # 1. 保存本地 JPG 副本（用于历史记录）
+        file.stream.seek(0)
+        local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
+        if not local_path:
+            continue
+        local_paths.append("/" + local_path.replace("\\", "/"))
+
+        # 2. 上传到外部服务（ImgBB 或 GitHub+jsDelivr）
+        try:
+            # 临时保存文件用于上传
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = tmp.name
+                with open(local_path, "rb") as src:
+                    tmp.write(src.read())
+            # 上传
+            external_url = upload_file(tmp_path, file.filename)
+            external_urls.append(external_url)
+        except Exception as e:
+            print(f"[Upload External Error] {e}")
+            external_urls.append(None)
+        finally:
+            if "tmp_path" in locals():
+                Path(tmp_path).unlink(missing_ok=True)
+
+    # 过滤掉上传失败的
+    valid_records = [
+        (url, local) for url, local in zip(external_urls, local_paths) if url
+    ]
+    if not valid_records:
+        return jsonify({"error": "All uploads failed"}), 500
+
+    external_urls, local_paths = zip(*valid_records)
+    return jsonify({"urls": list(external_urls), "local_paths": list(local_paths)})
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+    global is_generating
+    if current_task_lock.locked():
+        return jsonify({"error": "Another task is running. Please wait."}), 429
+
+    with current_task_lock:
+        data = request.get_json()
+        image_urls = data.get("image_urls", [])  # ← 这是 ImgBB URLs，正确！
+        prompt = data.get("prompt", "").strip()
+        size = data.get("size", "2K")
+        aspect_ratio = data.get("aspect_ratio", "auto")
+
+        if not prompt:
+            return jsonify({"error": "Prompt is required"}), 400
+
+        try:
+            result_urls = generate_via_image_fallback(
+                image_urls=image_urls,
+                prompt=prompt,
+                size=size,
+                ar=aspect_ratio,
+                fallback_order=["nano_banana", "rh_official"],
+            )
+        except Exception as e:
+            return jsonify({"error": f"Generation failed: {str(e)}"}), 500
+
+        if not result_urls:
+            return jsonify({"error": "All APIs failed to generate image"}), 500
+
+        # ✅ 保存结果图到本地（从 result_urls 下载）
+        local_result_paths = []
+        for url in result_urls:
+            local_path = save_image_from_url(url, RESULTS_DIR)
+            if local_path:
+                local_result_paths.append("/" + local_path.replace("\\", "/"))
+
+        if not local_result_paths:
+            return jsonify({"error": "Failed to save result images locally"}), 500
+
+        # ✅ 获取对应的本地输入图路径（用于历史记录展示）
+        # 假设前端传的 image_urls 顺序和本地保存一致 —— 但更可靠的方式是前端传 local_paths？
+        # 简化方案：我们从历史中匹配（不完美），或让前端同时传 local_input_paths
+        # → 更好的做法：前端在 generate 时同时传 local_input_paths
+
+        # 为简化，我们暂不保存输入图本地路径到 record（或从已有文件推断）
+        # 实际上，你可以通过 image_urls 的文件名反推，但略复杂
+        # 建议：前端在 /generate 时额外传 `local_input_paths`
+
+        local_input_paths = data.get("local_input_paths", [])
+
+        record_id = str(uuid.uuid4())
+        record = {
+            "id": record_id,
+            "timestamp": datetime.now().isoformat(),
+            "image_urls": image_urls,  # 外部 URL（用于调试）
+            "local_input_paths": local_input_paths,
+            "result_urls": result_urls,  # 外部 URL
+            "local_result_paths": local_result_paths,  # 本地路径
+            "prompt": prompt,
+            "size": size,
+            "aspect_ratio": aspect_ratio,
+        }
+
+        record_path = HISTORY_DIR / f"{record_id}.json"
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+
+        # 返回本地路径给前端展示
+        return jsonify(
+            {
+                "success": True,
+                "result_urls": local_result_paths,  # 前端用本地路径显示
+                "record_id": record_id,
+            }
+        )
+
+
+@app.route("/history")
+def get_history():
+    """分页获取历史记录（JSON 文件列表）"""
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 12))
+    if page < 1:
+        page = 1
+
+    # 获取所有 JSON 文件，按时间倒序
+    history_files = sorted(
+        HISTORY_DIR.glob("*.json"), key=os.path.getmtime, reverse=True
+    )
+
+    total = len(history_files)
+    start = (page - 1) * limit
+    end = start + limit
+    page_files = history_files[start:end]
+
+    records = []
+    for f in page_files:
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                record = json.load(fp)
+                # 只返回必要字段给前端
+                records.append(
+                    {
+                        "id": record["id"],
+                        "timestamp": record["timestamp"],
+                        "result_paths": record.get("local_result_paths", []),
+                        "result_urls": record.get("result_urls", []),
+                        "input_paths": record.get("local_input_paths", []),
+                        "input_urls": record.get("image_urls", []),
+                        "params": {
+                            "size": record["size"],
+                            "aspect_ratio": record["aspect_ratio"],
+                            "prompt": record["prompt"],
+                        },
+                    }
+                )
+        except Exception as e:
+            print(f"[History] Load error: {f} - {e}")
+            continue
+
+    return jsonify(
+        {
+            "records": records,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit,
+        }
+    )
+
+
+@app.route("/quick-upload", methods=["POST"])
+def quick_upload():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file"}), 400
+
+    local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
+    if not local_path:
+        return jsonify({"error": "Save failed"}), 500
+
+    try:
+        external_url = upload_file(local_path, file.filename)
+        return jsonify(
+            {
+                "url": external_url,
+                "local_path": "/" + local_path.replace("\\", "/"),
+            }
+        )
+    except Exception as e:
+        print(f"[Quick Upload Error] {e}")
+        return jsonify({"error": "External upload failed"}), 500
+
+
+@app.route("/save-cropped-images", methods=["POST"])
+def save_cropped_images():
+    """接收 Base64 图片列表，保存到 history/results/，返回本地路径"""
+    data = request.get_json()
+    base64_images = data.get("images", [])  # list of "data:image/jpeg;base64,..."
+
+    if not base64_images:
+        return jsonify({"error": "No images provided"}), 400
+
+    saved_paths = []
+    for b64_str in base64_images:
+        try:
+            # 去掉 data URL 前缀（如果有）
+            if b64_str.startswith("data:image"):
+                header, b64_str = b64_str.split(",", 1)
+
+            # 解码 Base64
+            image_data = base64.b64decode(b64_str)
+            image = Image.open(BytesIO(image_data)).convert("RGB")
+
+            # 生成唯一文件名
+            filename = f"{uuid.uuid4().hex}.jpg"
+            filepath = RESULTS_DIR / filename
+            image.save(filepath, "JPEG", quality=92)
+
+            # 返回相对于项目根目录的路径（前端可直接 /history/results/... 访问）
+            rel_path = f"/{filepath.relative_to(Path('.')).as_posix()}"
+            saved_paths.append(rel_path)
+        except Exception as e:
+            print(f"[Save Cropped Image Error] {e}")
+            continue
+
+    return jsonify({"success": True, "local_paths": saved_paths})
+
+
+@app.route("/history-record", methods=["POST"])
+def save_manual_history():
+    data = request.get_json()
+    i = 1
+    for local_result_path in data.get("local_result_paths", []):
+        record_data = copy.deepcopy(data)
+        record_data["local_result_paths"] = [local_result_path]
+        record_id = data.get("id", str(uuid.uuid4()))
+        record_path = HISTORY_DIR / f"{record_id}_{i}.json"
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record_data, f, ensure_ascii=False, indent=2)
+        i += 1
+    return jsonify({"success": True})
+
+
+@app.route("/history/<record_id>", methods=["DELETE"])
+def delete_history_record(record_id):
+    """删除指定历史记录（JSON + 本地图片）"""
+    try:
+        # 1. 找到 JSON 文件
+        json_path = None
+        for f in HISTORY_DIR.glob("*.json"):
+            if f.stem.startswith(record_id):
+                json_path = f
+                break
+
+        if not json_path:
+            return jsonify({"error": "Record not found"}), 404
+
+        # 2. 读取记录，获取所有本地图片路径
+        with open(json_path, "r", encoding="utf-8") as fp:
+            record = json.load(fp)
+
+        all_local_paths = []
+        all_local_paths.extend(record.get("local_result_paths", []))
+
+        # 3. 删除 JSON 文件
+        json_path.unlink()
+
+        # 4. 删除关联的本地图片
+        for rel_path in all_local_paths:
+            if rel_path.startswith("/"):
+                rel_path = rel_path[1:]
+            full_path = Path(rel_path)
+            if full_path.exists():
+                full_path.unlink()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"[Delete Error] {e}")
+        return jsonify({"error": "Delete failed"}), 500
+
+
+# @app.route("/swap_face", methods=["POST"])
+# def swap_face():
+#     """
+#     使用 generate_via_image_fallback 实现换脸：图1为被替换图像，图2为人脸源图像。
+#     """
+#     global is_generating
+#     if current_task_lock.locked():
+#         return jsonify({"error": "Another task is running. Please wait."}), 429
+
+#     with current_task_lock:
+#         try:
+#             data = request.get_json()
+#             source_url = data.get("source_url", "").strip()  # 图1：被换脸的图
+#             face_url = data.get("face_url", "").strip()  # 图2：提供人脸的图
+
+#             if not source_url or not face_url:
+#                 return jsonify({"error": "Missing source_url or face_url"}), 400
+
+#             # 构造输入图片顺序：[图1, 图2]
+#             image_urls = [source_url, face_url]
+
+#             # 精炼提示词：明确指令 + 保持其他不变
+#             prompt = "我需要执行一个换脸任务，target image是图1，face image是图2"
+
+#             # 使用现有生成逻辑（auto 长宽比，2K 尺寸）
+#             result_urls = generate_via_image_fallback(
+#                 image_urls=image_urls,
+#                 prompt=prompt,
+#                 size="2K",
+#                 ar="auto",
+#                 fallback_order=["nano_banana", "rh_official"],
+#             )
+
+#             if not result_urls:
+#                 return jsonify(
+#                     {"error": "All APIs failed to generate swapped image"}
+#                 ), 500
+
+#             # 保存结果到本地
+#             local_result_paths = []
+#             for url in result_urls:
+#                 local_path = save_image_from_url(url, RESULTS_DIR)
+#                 if local_path:
+#                     local_result_paths.append("/" + local_path.replace("\\", "/"))
+
+#             if not local_result_paths:
+#                 return jsonify({"error": "Failed to save result images locally"}), 500
+
+#             # 返回第一个结果（通常只有一个）
+#             return jsonify(
+#                 {
+#                     "success": True,
+#                     "result_url": result_urls[0],  # 原始外部 URL
+#                     "local_path": local_result_paths[0],  # 本地路径供前端显示
+#                 }
+#             )
+
+#         except Exception as e:
+#             print(f"[Swap Face Error] {e}")
+#             return jsonify({"error": f"换脸失败: {str(e)}"}), 500
+
+
+@app.route("/swap_face", methods=["POST"])
+def swap_face():
+    """
+    调用配置的换脸插件（如 replicate_swap），执行真实换脸。
+    """
+    try:
+        data = request.get_json()
+        source_url = data.get("source_url", "").strip()
+        face_url = data.get("face_url", "").strip()
+
+        if not source_url or not face_url:
+            return jsonify({"error": "Missing source_url or face_url"}), 400
+
+        # 获取换脸插件函数
+        swap_func = get_face_swap_plugin()
+        if swap_func is None:
+            return jsonify(
+                {"error": "Face swap plugin not configured or unavailable"}
+            ), 500
+
+        # 调用插件执行换脸
+        result_url = swap_func(source_image_url=source_url, face_image_url=face_url)
+
+        # 保存结果到本地（统一管理）
+        local_path = save_image_from_url(result_url, RESULTS_DIR)
+        if not local_path:
+            return jsonify({"error": "Failed to save swapped image locally"}), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "result_url": result_url,  # 外部 URL（调试用）
+                "local_path": "/" + local_path.replace("\\", "/"),  # 前端展示用
+            }
+        )
+
+    except Exception as e:
+        print(f"[Swap Face Error] {e}")
+        return jsonify({"error": f"换脸失败: {str(e)}"}), 500
+
+
+@app.route("/dummy_swap_face", methods=["POST"])
+def dummy_swap_face():
+    """
+    伪换脸接口：接收 source_url 和 face_url，返回一个占位结果图
+    """
+    try:
+        data = request.get_json()
+        source_url = data.get("source_url")
+        face_url = data.get("face_url")
+
+        if not source_url or not face_url:
+            return jsonify({"error": "Missing source_url or face_url"}), 400
+
+        # ✅ 伪逻辑：返回一个固定占位图（可替换为真实换脸）
+        result_url = "https://placehold.co/1280x800?text=FACE"
+
+        # （可选）未来替换为真实换脸：
+        # result_url = real_face_swap(source_url, face_url)
+
+        return jsonify({"success": True, "result_url": result_url})
+
+    except Exception as e:
+        print(f"[Swap Face Error] {e}")
+        return jsonify({"error": "换脸失败"}), 500
+
+
+# 确保目录存在
+STORYBOARD_DIR = os.path.join(os.path.dirname(__file__), "storyboards")
+os.makedirs(STORYBOARD_DIR, exist_ok=True)
+
+
+@app.route("/save-storyboard", methods=["POST"])
+def save_storyboard():
+    data = request.json
+    if "panels" not in data:
+        return jsonify({"success": False, "error": "无效数据"})
+
+    title = ""
+    if "title" in data:
+        title = data["title"]
+    record_id = None
+    if "id" in data:
+        record_id = data["id"]
+
+    # 验证 panels 结构
+    for panel in data["panels"]:
+        if not isinstance(panel.get("images"), list):
+            return jsonify({"success": False, "error": "images 必须是数组"})
+        for url in panel["images"]:
+            if not isinstance(url, str) or not url.strip():
+                return jsonify({"success": False, "error": "图片引用必须是有效字符串"})
+
+    # 如不存在输入id，则为新record生成唯一 ID
+    if not record_id:
+        record_id = (
+            f"sb_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        )
+
+    record = {
+        "title": title,
+        "id": record_id,
+        "type": "storyboard",
+        "timestamp": datetime.utcnow().isoformat(),
+        "panels": data["panels"],  # 仅保存引用路径
+    }
+
+    # 保存为单个 JSON 文件
+    filepath = os.path.join(STORYBOARD_DIR, f"{record_id}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True, "record_id": record_id})
+
+
+@app.route("/list-storyboards", methods=["GET"])
+def list_storyboards():
+    files = []
+    for f in os.listdir(STORYBOARD_DIR):
+        if f.endswith(".json"):
+            with open(os.path.join(STORYBOARD_DIR, f), "r", encoding="utf-8") as fp:
+                try:
+                    data = json.load(fp)
+                    files.append(
+                        {
+                            "id": data.get("id"),
+                            "title": data.get("title", "未命名故事板"),
+                            "timestamp": data.get("timestamp"),
+                        }
+                    )
+                except:
+                    continue
+    # 按时间倒序
+    files.sort(key=lambda x: x["timestamp"], reverse=True)
+    return jsonify(files)
+
+
+@app.route("/load-storyboard/<id>", methods=["GET"])
+def load_storyboard(id):
+    filepath = os.path.join(STORYBOARD_DIR, f"{id}.json")
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Not found"}), 404
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001, debug=True)
+
+
+---------------------
 index.html 内容如下
 --------------------
 <!-- 深色主题 index.html -->
@@ -695,6 +1326,7 @@ index.html 内容如下
                 ></button>
             </div>
             <div class="quick-images-container"></div>
+            <div class="resize-handle"></div>
         </div>
 
         <!-- 历史记录窗口 -->
@@ -716,6 +1348,7 @@ index.html 内容如下
                     ></ul>
                 </nav>
             </div>
+            <div class="resize-handle"></div>
         </div>
 
         <!-- 图片详情Modal -->
@@ -757,7 +1390,8 @@ main.js 内容如下
 
 (function () {
   const state = window.AIImageState;
-  const ITEMS_PER_PAGE = 12;
+  // 全局变量记录当前页
+  let currentHistoryWindowPage = 1;
 
   // ===== 提示词预览 =====
   function updatePromptPreview() {
@@ -830,7 +1464,7 @@ main.js 内容如下
                         `;
           });
           $("#generatedPreview").html(html);
-          loadHistoryPage(1);
+          loadHistoryWindowPage(1);
         } else {
           alert("生成失败: " + (res.error || "未知错误"));
         }
@@ -845,47 +1479,6 @@ main.js 内容如下
       },
     });
   });
-
-  // ===== 历史记录 =====
-  function showParamsModal(item) {
-    let inputHtml = "";
-    if (item.input_paths && item.input_paths.length > 0) {
-      inputHtml = '<h5>输入参考图：</h5><div class="d-flex flex-wrap gap-2">';
-      item.input_paths.forEach((url) => {
-        inputHtml += `<a href="${url}" data-lightbox="inputs-${item.id}"><img src="${url}" style="width:60px;height:60px;object-fit:cover;"></a>`;
-      });
-      inputHtml += "</div>";
-    }
-
-    const modalHtml = `
-            <div class="modal fade" id="paramsModal" tabindex="-1">
-                <div class="modal-dialog modal-lg">
-                    <div class="modal-content bg-dark text-light">
-                        <div class="modal-header">
-                            <h5 class="modal-title">生成参数</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                        </div>
-                        <div class="modal-body">
-                            <p><strong>提示词：</strong>${item.params.prompt.replace(/\n/g, "<br>")}</p>
-                            <p><strong>分辨率：</strong>${item.params.size}</p>
-                            <p><strong>长宽比：</strong>${item.params.aspect_ratio}</p>
-                            <p><strong>生成时间：</strong>${new Date(item.timestamp).toLocaleString("zh-CN")}</p>
-                            ${inputHtml}
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-    $("#historyList").append(modalHtml);
-    const modal = new bootstrap.Modal(document.getElementById("paramsModal"));
-    modal.show();
-    $("#paramsModal").on("hidden.bs.modal", function () {
-      $(this).remove();
-    });
-  }
 
   /**
    * 将指定图片载入“图片编辑”标签页并激活
@@ -911,65 +1504,6 @@ main.js 内容如下
     $("#imageEditPlaceholder").hide();
   }
 
-  function loadHistoryPage(page) {
-    $.get(
-      "/history?page=" + page + "&limit=" + ITEMS_PER_PAGE,
-      function (data) {
-        let html = "";
-        data.records.forEach((item) => {
-          const url = item.result_paths[0] || "";
-          html += `
-            <div class="col-6 col-sm-4 col-md-2 mb-3">
-              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                <a href="javascript:void(0);" class="history-img-link">
-                  <img src="${url}" class="w-100 history-img" style="aspect-ratio:1/1;object-fit:cover;" draggable="true" data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                </a>
-              </div>
-            </div>
-          `;
-        });
-        $("#historyList").html(html);
-
-        let pg = "";
-        for (let i = 1; i <= data.pages; i++) {
-          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
-        }
-        $("#historyPagination").html(pg);
-
-        // ✅ 仅在 shouldHighlightNewRecords 为 true 时执行高亮和滚动
-        if (shouldHighlightNewRecords) {
-          shouldHighlightNewRecords = false; // 重置标志，只触发一次
-
-          const cards = document.querySelectorAll("#quick-gen .history-card");
-          const count = Math.min(4, cards.length);
-
-          // 高亮前 4 张
-          for (let i = 0; i < count; i++) {
-            const card = cards[i];
-            card.style.transition = "background-color 1.5s ease";
-            card.style.backgroundColor = "#ffeb3b";
-
-            setTimeout(() => {
-              card.style.backgroundColor = "";
-            }, 1500);
-          }
-
-          // 滚动到 #quick-gen 容器底部（或 historyList 底部）
-          const quickGenContainer = document.getElementById("quick-gen");
-          if (quickGenContainer) {
-            // 使用 smooth 滚动到底部
-            quickGenContainer.scrollIntoView({
-              behavior: "smooth",
-              block: "end",
-            });
-            // 或者如果你希望滚动的是整个页面到底部（取决于布局）：
-            // window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-          }
-        }
-      },
-    );
-  }
-
   // ===== 事件绑定 =====
   $(document).ready(function () {
     // 模式切换
@@ -992,12 +1526,12 @@ main.js 内容如下
 
     $(document).on("click", "#historyPagination .page-link", function (e) {
       e.preventDefault();
-      loadHistoryPage(parseInt($(this).text()));
+      loadHistoryWindowPage(parseInt($(this).text()));
     });
 
     // 初始化
     updatePromptPreview();
-    loadHistoryPage(1);
+    loadHistoryWindowPage(1);
 
     // 如果你希望在切换标签时执行某些 JS 逻辑（例如懒加载、初始化组件等），可以监听 Bootstrap 的 shown.bs.tab 事件：
     document.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
@@ -1008,11 +1542,6 @@ main.js 内容如下
     });
 
     // ===== 拖拽到目标区域逻辑 =====
-
-    // 监听 dragend（取消）
-    $(document).on("dragend dragcancel", "*", function () {
-      cleanupDragState();
-    });
 
     // 点击历史卡片，弹出详情浮窗
     $(document).on("click", ".history-card", function (e) {
@@ -1168,7 +1697,7 @@ main.js 内容如下
               parseInt(
                 $("#historyPagination .page-item.active .page-link").text(),
               ) || 1;
-            loadHistoryPage(currentPage);
+            loadHistoryWindowPage(currentPage);
           } else {
             alert("删除失败: " + (res.error || "未知错误"));
           }
@@ -1280,30 +1809,24 @@ main.js 内容如下
     });
 
     // 历史窗口分页
-    function loadHistoryWindowPage(page) {
-      const ITEMS_PER_PAGE = 12;
-      $.get(`/history?page=${page}&limit=${ITEMS_PER_PAGE}`, function (data) {
+    function loadHistoryWindowPage(page, limit = 12) {
+      currentHistoryWindowPage = page;
+      $.get(`/history?page=${page}&limit=${limit}`, function (data) {
         let html = "";
         data.records.forEach((item) => {
           const url = item.result_paths[0] || "";
-          // 替换原 img 标签
           html += `
             <div class="col-6 col-sm-4 col-md-3 mb-3">
               <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-                <a href="javascript:void(0);">
-                  <img
-                    src="${url}"
-                    class="w-100"
-                    style="aspect-ratio:1/1;object-fit:cover;"
-                    draggable="true"
-                    data-history-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'
-                  >
-                </a>
+
+                  <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
+
               </div>
             </div>
           `;
         });
         $("#historyWindowList").html(html);
+
         let pg = "";
         for (let i = 1; i <= data.pages; i++) {
           pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
@@ -1317,7 +1840,13 @@ main.js 内容如下
       "#historyWindowPagination .page-link",
       function (e) {
         e.preventDefault();
-        loadHistoryWindowPage(parseInt($(this).text()));
+        const page = parseInt($(this).text());
+        // 重新计算当前 limit（或缓存）
+        const win = document.getElementById("historyWindow");
+        const containerWidth =
+          win?.querySelector(".history-content")?.clientWidth || 400;
+        const limit = calculateHistoryItemsPerPage(containerWidth);
+        loadHistoryWindowPage(page, limit);
       },
     );
 
@@ -1482,670 +2011,766 @@ main.js 内容如下
       },
     );
 
+    function makeResizable(windowSelector) {
+      const win = document.querySelector(windowSelector);
+      if (!win) return;
+
+      const handle = win.querySelector(".resize-handle");
+      if (!handle) return;
+
+      let isResizing = false;
+
+      handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        isResizing = true;
+        document.body.classList.add("resizing");
+        document.addEventListener("mousemove", resize);
+        document.addEventListener("mouseup", stopResize);
+      });
+
+      function resize(e) {
+        if (!isResizing) return;
+        const rect = win.getBoundingClientRect();
+        const dx = e.clientX - rect.right;
+        const dy = e.clientY - rect.bottom;
+
+        let newWidth = rect.width + dx;
+        let newHeight = rect.height + dy;
+
+        // 限制 min/max
+        newWidth = Math.min(800, Math.max(300, newWidth));
+        newHeight = Math.min(600, Math.max(200, newHeight));
+
+        win.style.width = newWidth + "px";
+        win.style.height = newHeight + "px";
+      }
+
+      function stopResize() {
+        isResizing = false;
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", resize);
+        document.removeEventListener("mouseup", stopResize);
+
+        // ✅ 调整结束：如果是历史窗口，重新加载
+        if (windowSelector === "#historyWindow") {
+          debouncedReloadHistoryWindow();
+        }
+      }
+    }
+
+    function calculateHistoryItemsPerPage(containerWidth) {
+      // 每张卡片约 100px 宽（含 gutter）
+      const cols = Math.max(2, Math.floor(containerWidth / 110));
+      // 高度区域约 400px 可用，每行 120px
+      const rows = Math.max(2, Math.floor(400 / 120));
+      return cols * rows;
+    }
+
+    function debounce(func, wait) {
+      let timeout;
+      return function (...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    }
+
+    const debouncedReloadHistoryWindow = debounce(() => {
+      const win = document.getElementById("historyWindow");
+      if (!win) return;
+
+      const containerWidth = win.querySelector(".history-content").clientWidth;
+      const newLimit = calculateHistoryItemsPerPage(containerWidth);
+
+      // 可选：存入全局或闭包，避免重复加载相同 limit
+      loadHistoryWindowPage(currentHistoryWindowPage, newLimit);
+    }, 300);
+
+    makeResizable("#quickAccessWindow");
+    makeResizable("#historyWindow");
+
     // document ready 结束
   });
 })();
 
 
 ---------------------
-quick-access.js 内容如下
+state.js 内容如下
 --------------------
-// static/quick-access.js
-window.QuickAccess = (function () {
-  const STORAGE_KEY = "quickAccessImages";
-  let images = [];
-  let currentFilter = "all"; // "all", "角色", "场景"
+// state.js
 
-  function load() {
+// 全局提示函数
+function showToast(message, type = "info", delay = 0) {
+  // type: 'success', 'error', 'warning', 'info'
+  const colors = {
+    success: "green",
+    error: "red",
+    warning: "orange",
+    info: "blue",
+  };
+  const bgColor = colors[type] || "blue";
+
+  const toastId = "toast-" + Date.now();
+  const toastHtml = `
+    <div id="${toastId}" class="toast align-items-center text-white border-0 mb-2" role="alert" style="background-color: ${bgColor}; min-width: 250px; pointer-events: auto;">
+      <div class="d-flex">
+        <div class="toast-body">
+          ${message}
+        </div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  `;
+
+  const container = document.getElementById("globalToastContainer");
+  container.insertAdjacentHTML("beforeend", toastHtml);
+
+  const toastEl = document.getElementById(toastId);
+  let toast = null;
+  if (delay == 0) {
+    toast = new bootstrap.Toast(toastEl, {
+      autohide: false,
+    });
+  } else if (delay > 0) {
+    toast = new bootstrap.Toast(toastEl, {
+      autohide: true,
+      delay: delay,
+    });
+  }
+
+  toast.show();
+
+  // 自动清理已隐藏的 toast
+  toastEl.addEventListener("hidden.bs.toast", () => {
+    toastEl.remove();
+  });
+}
+
+window.AIImageState = (function () {
+  let uploadedImageUrls = [];
+  let uploadedLocalPaths = [];
+
+  return {
+    getUploadedUrls() {
+      return [...uploadedImageUrls];
+    },
+    getLocalPaths() {
+      return [...uploadedLocalPaths];
+    },
+    setUploadedUrls(urls) {
+      uploadedImageUrls = [...urls];
+    },
+    setLocalPaths(paths) {
+      uploadedLocalPaths = [...paths];
+    },
+    addUploadedFiles(urls, localPaths) {
+      uploadedImageUrls.push(...urls);
+      uploadedLocalPaths.push(...localPaths);
+    },
+    removeAtIndex(index) {
+      uploadedImageUrls.splice(index, 1);
+      uploadedLocalPaths.splice(index, 1);
+    },
+    swapIndices(i, j) {
+      if (
+        i < 0 ||
+        j < 0 ||
+        i >= uploadedImageUrls.length ||
+        j >= uploadedImageUrls.length
+      )
+        return;
+      [uploadedImageUrls[i], uploadedImageUrls[j]] = [
+        uploadedImageUrls[j],
+        uploadedImageUrls[i],
+      ];
+      [uploadedLocalPaths[i], uploadedLocalPaths[j]] = [
+        uploadedLocalPaths[j],
+        uploadedLocalPaths[i],
+      ];
+    },
+    clear() {
+      uploadedImageUrls = [];
+      uploadedLocalPaths = [];
+    },
+    getCount() {
+      return uploadedLocalPaths.length;
+    },
+    setFromUrls: function (urls, paths) {
+      uploadedImageUrls = [...urls];
+      uploadedLocalPaths = [...paths]; // mock 文件名
+    },
+    addFromQuickAccess(localPath, remoteUrl) {
+      const exists =
+        uploadedLocalPaths.includes(localPath) ||
+        uploadedImageUrls.includes(remoteUrl);
+      if (exists) return false;
+      if (uploadedLocalPaths.length >= 10) return false;
+      uploadedLocalPaths.push(localPath);
+      uploadedImageUrls.push(remoteUrl);
+      return true;
+    },
+  };
+})();
+
+
+---------------------
+storyboard.js 内容如下
+--------------------
+// storyboard.js - 故事板编辑器
+(() => {
+  const PANEL_MAX_COUNT = 12;
+  const CAMERA_MOVEMENTS = [
+    { value: "fixed", label: "固定镜头" },
+    { value: "pan", label: "横摇（Pan）" },
+    { value: "tilt", label: "俯仰（Tilt）" },
+    { value: "zoom_in", label: "推进（Zoom In）" },
+    { value: "zoom_out", label: "拉远（Zoom Out）" },
+    { value: "dolly_in", label: "推轨靠近（Dolly In）" },
+    { value: "dolly_out", label: "推轨远离（Dolly Out）" },
+    { value: "track_left", label: "左移跟拍" },
+    { value: "track_right", label: "右移跟拍" },
+    { value: "track_forward", label: "前进跟拍" },
+    { value: "track_backward", label: "后退跟拍" },
+    { value: "handheld", label: "手持晃动" },
+    { value: "crane_up", label: " crane 上升" },
+    { value: "crane_down", label: " crane 下降" },
+    { value: "static_with_focus_rack", label: "固定 + 焦点转移" },
+    { value: "other", label: "其他（请说明）" },
+  ];
+
+  let storyboardState = {
+    currentId: null, // 当前打开的故事板 ID
+    title: "未命名故事板", // 当前标题
+    panels: [],
+  };
+
+  // 获取所有已保存的故事板（从本地 storyboards/ 目录）
+  async function loadStoryboardList() {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      images = saved ? JSON.parse(saved) : [];
-      images.forEach((img) => {
-        // 迁移老数据
-        if (img.tag && img.tag !== "全部") {
-          // 老 tag → category
-          img.category = img.tag;
-          img.group = img.title || img.tag;
-          delete img.tag;
-          delete img.title;
-        } else if (!img.category) {
-          // 未分类：把 title 作为 group
-          img.category = null;
-          img.group = img.title || "";
-          delete img.tag;
-          delete img.title;
+      const resp = await fetch("/list-storyboards");
+      const list = await resp.json();
+      const select = $("#storyboardSelector");
+      // 保留前两个选项（—选择— 和 新建）
+      const staticOptions = select.find("option:lt(2)").clone();
+      select.empty().append(staticOptions);
+      // 添加已保存的故事板
+      list.forEach((sb) => {
+        const opt = $(
+          `<option value="${sb.id}">${sb.title || "未命名"}</option>`,
+        );
+        if (sb.id === storyboardState.currentId) {
+          opt.prop("selected", true);
         }
-        if (!img.addedAt) img.addedAt = new Date().toISOString();
+        select.append(opt);
       });
-    } catch (e) {
-      images = [];
+    } catch (err) {
+      console.error("加载故事板列表失败", err);
     }
   }
 
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(images));
+  async function loadStoryboardListIntoDropdown() {
+    try {
+      const resp = await fetch("/list-storyboards");
+      const list = await resp.json();
+      const menu = $("#storyboardDropdownMenu");
+      // 清空动态部分（保留前两项：新建 + 分割线）
+      menu.find("li:not(:first-child):not(:nth-child(2))").remove();
+      list.forEach((sb) => {
+        const isActive = sb.id === storyboardState.currentId;
+        const li = $(`
+          <li>
+            <a class="dropdown-item ${isActive ? "active" : ""}" href="#" data-id="${sb.id}">
+              ${sb.title || "未命名故事板"}
+            </a>
+          </li>
+        `);
+        menu.append(li);
+      });
+    } catch (err) {
+      console.error("加载故事板列表失败", err);
+    }
   }
 
-  async function addImage({ localPath, remoteUrl }) {
-    console.log([localPath, remoteUrl]);
-    if (!localPath && !remoteUrl) return;
+  function bindDropZoneEvents() {
+    const container = document.getElementById("storyboardPanels");
+    if (!container) return;
 
-    const exists = images.some(
-      (img) =>
-        (img.remoteUrl === remoteUrl && remoteUrl) ||
-        (img.localPath === localPath && localPath),
-    );
-    if (exists) return;
+    // 全局：阻止默认 dragover 行为（否则无法 drop）
+    container.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
 
-    let usableLocal = localPath;
-    let usableRemote = remoteUrl;
-    if (usableRemote && !usableRemote.startsWith("https://")) {
-      usableRemote = null;
-    }
+    // 拖入某个分镜的 .panel-images 区域
+    container.addEventListener("dragenter", (e) => {
+      const target = e.target.closest(".panel-images");
+      if (target) {
+        target.classList.add("storyboard-drop-target");
+      }
+    });
 
-    if (usableLocal && !usableRemote) {
-      try {
-        const resp = await fetch(usableLocal);
-        const blob = await resp.blob();
-        const formData = new FormData();
-        formData.append("file", blob, "quick.jpg");
-        const uploadRes = await fetch("/quick-upload", {
-          method: "POST",
-          body: formData,
-        });
-        if (uploadRes.ok) {
-          const data = await uploadRes.json();
-          usableRemote = data.url;
-          usableLocal = data.local_path || usableLocal;
-        } else {
-          alert("上传至快捷访问失败");
-          return;
+    container.addEventListener("dragleave", (e) => {
+      const target = e.target.closest(".panel-images");
+      if (target) {
+        // 防止子元素 leave 触发父元素 leave
+        const related = e.relatedTarget;
+        if (!target.contains(related)) {
+          target.classList.remove("storyboard-drop-target");
         }
-      } catch (e) {
-        console.error("QuickAccess upload error:", e);
-        alert("上传失败，请重试");
+      }
+    });
+
+    // 核心：drop 事件
+    container.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      const url = e.dataTransfer.getData("text/plain");
+      if (!url) return;
+
+      // 清除所有高亮
+      container.querySelectorAll(".storyboard-drop-target").forEach((el) => {
+        el.classList.remove("storyboard-drop-target");
+      });
+
+      // 判断是否 drop 到某个分镜的 .panel-images
+      const panelImages = e.target.closest(".panel-images");
+      if (panelImages) {
+        // 情况2：添加到指定分镜
+        const panelId = panelImages.closest("[data-panel-id]").dataset.panelId;
+        const panel = storyboardState.panels.find(
+          (p) => p.panel_id === panelId,
+        );
+        if (panel) {
+          panel.images.push(url);
+          renderPanels();
+          applyUniformAspectRatio();
+          updateSaveButton();
+          showToast("图片已添加到分镜", "success", 2000);
+        }
+      } else {
+        // 情况1：故事板为空 OR 拖到空白区域 → 新建分镜
+        if (storyboardState.panels.length === 0) {
+          addPanel({
+            images: [url],
+            description: "",
+            cameraMovement: "fixed",
+            cameraNote: "",
+          });
+          showToast("已创建新分镜并添加图片", "success", 2000);
+        } else {
+          // 可选：也可以提示“请拖到具体分镜区域”
+          showToast("请将图片拖到具体分镜卡片内", "info", 2000);
+        }
+      }
+    });
+  }
+
+  function init() {
+    renderPanels();
+    applyUniformAspectRatio();
+    bindGlobalEvents();
+    bindDropZoneEvents();
+  }
+
+  function bindGlobalEvents() {
+    $("#storyboardTitle").on("blur input", function () {
+      const newTitle = $(this).text().trim() || "未命名故事板";
+      $(this).text(newTitle);
+      storyboardState.title = newTitle;
+      // 可选：自动保存草稿（或仅标记 dirty）
+    });
+
+    $("#newStoryboardBtn").click(resetStoryboard);
+
+    $("#addStoryboardPanelBtn").click(() => {
+      if (storyboardState.panels.length >= PANEL_MAX_COUNT) {
+        showToast(`最多支持 ${PANEL_MAX_COUNT} 个分镜`, "error", 5000);
+        return;
+      }
+      addPanel({
+        images: [],
+        description: "",
+        cameraMovement: "fixed",
+        cameraNote: "",
+      });
+    });
+
+    $("#saveStoryboardBtn").click(saveStoryboard);
+  }
+
+  // 清空当前故事板，开始新的
+  function resetStoryboard() {
+    if (storyboardState.panels.length > 0) {
+      if (
+        !confirm("当前故事板有内容，确定要新建一个吗？未保存的内容将丢失。")
+      ) {
         return;
       }
     }
-
-    images.push({
-      localPath: usableLocal,
-      remoteUrl: usableRemote,
-      addedAt: new Date().toISOString(),
-      tag: "全部",
-      title: "", // ← 新增
-    });
-    save();
-    renderSidebar();
+    storyboardState.panels = [];
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
   }
 
-  function setTitle(index, newTitle) {
-    if (images[index]) {
-      images[index].title = (newTitle || "").trim();
-      save();
-      renderSidebar();
-    }
+  function addPanel(data) {
+    const panel_id = data.panel_id || crypto.randomUUID();
+    storyboardState.panels.push({ panel_id, ...data });
+    console.log(storyboardState);
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
+    document
+      .getElementById("storyboardPanels")
+      .scrollIntoView({ behavior: "smooth" });
+    //$("#storyboardPlaceholder").removeClass("d-flex").hide();
   }
 
-  function setTag(index, newTag) {
-    if (images[index]) {
-      images[index].tag = newTag;
-      save();
-      renderSidebar();
-    }
+  function removePanel(id) {
+    storyboardState.panels = storyboardState.panels.filter(
+      (p) => p.panel_id !== id,
+    );
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
   }
 
-  function removeImage(index) {
-    images.splice(index, 1);
-    save();
-    renderSidebar();
+  function updatePanel(id, updates) {
+    const panel = storyboardState.panels.find((p) => p.panel_id === id);
+    if (panel) Object.assign(panel, updates);
+    updateSaveButton();
   }
 
-  function setFilter(filter) {
-    currentFilter = filter;
-    renderSidebar();
-  }
+  function renderPanels() {
+    const container = $("#storyboardPanels");
+    const placeholder = $("#storyboardPlaceholder");
 
-  // ===== 新增：显示添加/编辑弹窗 =====
-  function showAddQuickAccessModal(imgData = null) {
-    // imgData 用于编辑已有项
-    const isEditing = !!imgData;
-    const category = imgData?.category || "none";
-    const group = imgData?.group || "";
-    const viewType = imgData?.viewType || "";
-    const note = imgData?.note || "";
+    if (storyboardState.panels.length === 0) {
+      $("#storyboardPlaceholder").addClass("d-flex").show();
+      container.hide();
+      placeholder.show();
+      $("#storyboardTitleInput").val(storyboardState.title);
+      $("#storyboardTitleText").text(storyboardState.title);
+    } else {
+      $("#storyboardPlaceholder").removeClass("d-flex").hide();
+      placeholder.hide();
+      container.show();
+      $("#storyboardTitleInput").val(storyboardState.title);
+      $("#storyboardTitleText").text(storyboardState.title);
+      let html = "";
+      storyboardState.panels.forEach((panel) => {
+        const imgHtml =
+          panel.images.length === 0
+            ? '<div class="text-center text-muted py-3">上传或拖入已有图片</div>'
+            : panel.images
+                .map(
+                  (url, idx) =>
+                    `<a href="${url}" data-lightbox="panel-${panel.panel_id}" style="position:absolute; top:0; left:0; width:90%; height:90%; " class="panel-image-stack-link"><img src="${url}"  class="panel-image-stack" style="z-index:${panel.images.length - idx}"></a>`,
+                )
+                .join("");
 
-    const modalId = "quickAccessDetailModal";
-    let html = `
-    <div class="modal fade" id="${modalId}" tabindex="-1">
-      <div class="modal-dialog">
-        <div class="modal-content bg-dark text-light">
-          <div class="modal-header">
-            <h5 class="modal-title">${isEditing ? "图片信息" : "图片信息"}</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-          </div>
-          <div class="modal-body">
-            <!-- 分类选择 -->
-            <div class="mb-3">
-              <label class="form-label">分类</label>
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="qaCategory" id="qaNone" value="none" ${category === "none" ? "checked" : ""}>
-                <label class="form-check-label" for="qaNone">不分类</label>
+        const cameraOptions = CAMERA_MOVEMENTS.map(
+          (opt) =>
+            `<option value="${opt.value}" ${panel.camera_movement === opt.value ? "selected" : ""}>${opt.label}</option>`,
+        ).join("");
+
+        html += `
+          <div class="col-12 col-md-6 col-lg-4" data-panel-id="${panel.panel_id}">
+            <div class="card h-100">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <select class="form-select form-select-sm camera-movement">
+                  ${cameraOptions}
+                </select>
+                <button type="button" class="btn-close btn-sm remove-panel" aria-label="删除"></button>
               </div>
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="qaCategory" id="qaChar" value="角色" ${category === "角色" ? "checked" : ""}>
-                <label class="form-check-label" for="qaChar">角色</label>
-              </div>
-              <div class="form-check">
-                <input class="form-check-input" type="radio" name="qaCategory" id="qaScene" value="场景" ${category === "场景" ? "checked" : ""}>
-                <label class="form-check-label" for="qaScene">场景</label>
+              <div class="card-body d-flex flex-column">
+                <div class="panel-images mb-2" style="  display:flex;   gap:2px;">
+                  ${imgHtml}
+                </div>
+                <button type="button" class="btn btn-outline-secondary btn-sm mb-2 add-image-to-panel">+ 添加图片</button>
+                <textarea class="form-control description mb-2" rows="2" placeholder="镜头描述、对白等...">${panel.description}</textarea>
+                <textarea class="form-control camera-note ${panel.cameraMovement === "other" ? "" : "d-none"}" rows="1" placeholder="请说明运镜方式...">${panel.cameraNote}</textarea>
               </div>
             </div>
-
-            <!-- 动态字段容器 -->
-            <div id="qaDynamicFields"></div>
           </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-primary" id="qaSaveBtn">${isEditing ? "保存" : "添加"}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    `;
-    // 替换原初始化代码
-    $("#quickAccessWindow").append(html);
+        `;
+      });
+      container.html(html);
+      setupPanelEvents();
+    }
+  }
 
-    const modalEl = document.getElementById(modalId);
-    if (!modalEl) {
-      console.log("not modal");
+  // 计算并应用统一的图片宽高比
+  async function applyUniformAspectRatio() {
+    const panels = storyboardState.panels;
+    if (panels.length === 0 || panels[0].images.length === 0) {
+      // 没有参考图，恢复默认样式
+      $(".panel-images").css("aspect-ratio", "");
       return;
     }
 
-    // ✅ 关键修复：通过 data attribute 设置 backdrop
-    modalEl.setAttribute("data-bs-backdrop", "false");
-    modalEl.setAttribute("data-bs-keyboard", "true"); // 可选
+    const firstImageUrl = panels[0].images[0];
+    try {
+      // 加载图片并获取原始宽高
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("加载参考图失败"));
+        img.src = firstImageUrl;
+      });
 
-    const modal = new bootstrap.Modal(modalEl);
-    modal.show();
-
-    // 动态渲染字段
-    function renderDynamicFields() {
-      const cat = $('input[name="qaCategory"]:checked').val();
-      let fieldsHtml = "";
-
-      if (cat === "none") {
-        fieldsHtml = `
-          <div class="mb-3">
-            <label class="form-label">标题</label>
-            <input type="text" class="form-control" id="qaTitle" value="${group}">
-          </div>
-        `;
-      } else {
-        // 收集已有的 group 名字（去重）
-        const existingGroups = [
-          ...new Set(
-            images
-              .filter((img) => img.category === cat)
-              .map((img) => img.group)
-              .filter((g) => g && typeof g === "string"),
-          ),
-        ].sort();
-
-        // 构建选项
-        let optionsHtml = `<option value="">（请选择或输入新名字）</option>`;
-        existingGroups.forEach((g) => {
-          const selected = g === group ? "selected" : "";
-          optionsHtml += `<option value="${g}" ${selected}>${g}</option>`;
-        });
-        optionsHtml += `<option value="__new__" ${group && !existingGroups.includes(group) ? "selected" : ""}>其他（请输入）…</option>`;
-
-        const label = cat === "角色" ? "角色名字" : "场景名字";
-        fieldsHtml += `
-          <div class="mb-3">
-            <label class="form-label">${label}</label>
-            <select class="form-select" id="qaGroupSelect">
-              ${optionsHtml}
-            </select>
-            <input type="text" class="form-control mt-1 d-none" id="qaGroupInput" placeholder="输入新名字…" value="${group && !existingGroups.includes(group) ? group : ""}">
-          </div>
-        `;
-
-        // 视角下拉
-        const charViews = [
-          { value: "front_full", label: "正面全身" },
-          { value: "side_full", label: "侧面全身" },
-          { value: "back_full", label: "背面全身" },
-          { value: "face_closeup", label: "面部特写" },
-        ];
-        const sceneViews = [
-          { value: "wide_shot", label: "全景" },
-          { value: "medium_shot", label: "近景" },
-          { value: "birdseye", label: "俯视" },
-          { value: "wormseye", label: "仰视" },
-        ];
-        const views = cat === "角色" ? charViews : sceneViews;
-        fieldsHtml += `
-          <div class="mb-3">
-            <label class="form-label">视角</label>
-            <select class="form-select" id="qaViewType">
-              <option value="">（可选）</option>
-              ${views.map((v) => `<option value="${v.value}" ${viewType === v.value ? "selected" : ""}>${v.label}</option>`).join("")}
-            </select>
-          </div>
-        `;
-
-        // 备注
-        fieldsHtml += `
-          <div class="mb-3">
-            <label class="form-label">备注（可选）</label>
-            <input type="text" class="form-control" id="qaNote" placeholder="如：校服、雨天" value="${note}">
-          </div>
-        `;
-      }
-
-      $("#qaDynamicFields").html(fieldsHtml);
-
-      // 切换“其他…”时显示输入框
-      $("#qaGroupSelect")
-        .off("change")
-        .on("change", function () {
-          const val = $(this).val();
-          if (val === "__new__") {
-            $("#qaGroupInput").removeClass("d-none").focus();
-          } else {
-            $("#qaGroupInput").addClass("d-none");
-          }
-        });
+      const aspectRatio = img.naturalWidth / img.naturalHeight;
+      // 应用到所有 .panel-images 容器
+      $(".panel-images").css("aspect-ratio", `${aspectRatio}`);
+    } catch (err) {
+      console.warn("无法获取第一张图的尺寸，使用默认比例", err);
+      $(".panel-images").css("aspect-ratio", "");
     }
+  }
 
-    // 初始渲染
-    renderDynamicFields();
-    $('input[name="qaCategory"]').on("change", renderDynamicFields);
-
-    // 保存逻辑
-    $("#qaSaveBtn").on("click", async () => {
-      const cat = $('input[name="qaCategory"]:checked').val();
-      let newImage = null;
-      if (cat === "none") {
-        const title = $("#qaTitle").val().trim();
-        if (!title) {
-          showToast("标题不能为空", "warning");
-          return;
-        }
-        newImage = {
-          category: null,
-          group: title, // 老 title 兼容字段
-          viewType: null,
-          note: null,
-          ...(imgData
-            ? {
-                localPath: imgData.localPath,
-                remoteUrl: imgData.remoteUrl,
-                addedAt: imgData.addedAt,
-              }
-            : {}),
-        };
-      } else {
-        let group;
-        const selectVal = $("#qaGroupSelect").val();
-        if (selectVal === "__new__") {
-          group = $("#qaGroupInput").val().trim();
-        } else {
-          group = selectVal;
-        }
-        if (!group) {
-          showToast(`${cat}名字不能为空`, "warning");
-          return;
-        }
-        newImage = {
-          category: cat,
-          group: group,
-          viewType: $("#qaViewType").val() || null,
-          note: $("#qaNote").val().trim() || null,
-          ...(imgData
-            ? {
-                localPath: imgData.localPath,
-                remoteUrl: imgData.remoteUrl,
-                addedAt: imgData.addedAt,
-              }
-            : {}),
-        };
-      }
-
-      if (!isEditing) {
-        // 新增：需传入图片路径
-        if (!window.__currentQuickAddImage) {
-          showToast("图片信息缺失", "error");
-          return;
-        }
-        newImage.localPath = window.__currentQuickAddImage.localPath;
-        newImage.remoteUrl = window.__currentQuickAddImage.remoteUrl;
-        newImage.addedAt = new Date().toISOString();
-        images.push(newImage);
-      } else {
-        // 编辑：替换原数据
-        const idx = images.findIndex(
-          (i) =>
-            i.localPath === imgData.localPath &&
-            i.remoteUrl === imgData.remoteUrl,
-        );
-        if (idx !== -1) images[idx] = newImage;
-      }
-
-      save();
-      renderSidebar();
-      modal.hide();
+  function setupPanelEvents() {
+    $(".remove-panel").click(function () {
+      const id = $(this).closest("[data-panel-id]").data("panel-id");
+      removePanel(id);
     });
 
-    // 删除（仅编辑时）
-    if (isEditing) {
-      $("#qaDeleteBtn").on("click", () => {
-        if (confirm("确定删除？")) {
-          const idx = images.findIndex(
-            (i) =>
-              i.localPath === imgData.localPath &&
-              i.remoteUrl === imgData.remoteUrl,
-          );
-          if (idx !== -1) images.splice(idx, 1);
-          save();
-          renderSidebar();
-          modal.hide();
-        }
-      });
-    }
-
-    // 自动清理
-    $(`#${modalId}`).on("hidden.bs.modal", () => $(`#${modalId}`).remove());
-  }
-
-  // 辅助函数
-  function getViewTypeLabel(key) {
-    const map = {
-      front_full: "正面全身",
-      side_full: "侧面全身",
-      back_full: "背面全身",
-      face_closeup: "面部特写",
-      wide_shot: "全景",
-      medium_shot: "近景",
-      birdseye: "俯视",
-      wormseye: "仰视",
-    };
-    return map[key] || "";
-  }
-
-  function buildQuickImgItem(img, title) {
-    const originalIndex = images.findIndex(
-      (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
-    );
-    const titleDisplay = title
-      ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
-      : "";
-    return `
-    <div class="quick-img-item position-relative border rounded d-flex justify-content-center align-items-center"
-         style="width:120px;height:120px;cursor:pointer;" title="${title || "点击加入参考图"}">
-      <img draggable="true" src="${img.localPath || img.remoteUrl}" style="width:100%;height:100%;object-fit:contain;">
-      ${titleDisplay}
-      <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
-        <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
-        <ul class="dropdown-menu p-1" style="font-size:12px;">
-          <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
-          <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
-        </ul>
-      </div>
-    </div>
-    `;
-  }
-
-  function renderSidebar(
-    containerSelector = "#quickAccessWindow .quick-images-container",
-  ) {
-    const $container = $(containerSelector);
-    if ($container.length === 0) return;
-
-    let $renderTarget;
-
-    // —————— 1. 确定渲染目标容器 ——————
-    $container.empty();
-    $renderTarget = $container;
-
-    // —————— 2. 渲染过滤器 ——————
-
-    let $filter = $renderTarget.find(".quick-filter");
-    if ($filter.length === 0) {
-      $filter = $(`
-          <div class="quick-filter d-flex gap-2 mb-2">
-            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
-          </div>
-        `);
-      $renderTarget.append($filter);
-      $filter.on("click", ".filter-btn", function () {
-        const filter = $(this).data("filter");
-        setFilter(filter);
-        // $filter.find(".filter-btn").removeClass("active");
-        // $(this).addClass("active");
-      });
-      $filter
-        .find(`.filter-btn[data-filter="${currentFilter}"]`)
-        .addClass("active");
-    }
-
-    // —————— 3. 构建图像 HTML ——————
-    // 过滤图片
-    const filteredImages =
-      currentFilter === "all"
-        ? images
-        : images.filter((img) => img.category === currentFilter);
-
-    // 替换原 $container.html(html) 部分
-    // 先分类
-    const byCategory = {
-      角色: {},
-      场景: {},
-      未分类: [],
-    };
-
-    filteredImages.forEach((img) => {
-      if (img.category === "角色") {
-        if (!byCategory["角色"][img.group]) byCategory["角色"][img.group] = [];
-        byCategory["角色"][img.group].push(img);
-      } else if (img.category === "场景") {
-        if (!byCategory["场景"][img.group]) byCategory["场景"][img.group] = [];
-        byCategory["场景"][img.group].push(img);
-      } else {
-        byCategory["未分类"].push(img);
-      }
+    $(".camera-movement").change(function () {
+      const id = $(this).closest("[data-panel-id]").data("panel-id");
+      const val = $(this).val();
+      updatePanel(id, { cameraMovement: val });
+      $(this)
+        .closest(".card")
+        .find(".camera-note")
+        .toggleClass("d-none", val !== "other");
     });
 
-    let html = "";
+    $(".description, .camera-note").on("input", function () {
+      const id = $(this).closest("[data-panel-id]").data("panel-id");
+      const field = $(this).hasClass("description")
+        ? "description"
+        : "cameraNote";
+      updatePanel(id, { [field]: this.value });
+    });
 
-    // 渲染角色
-    for (const [group, imgs] of Object.entries(byCategory["角色"])) {
-      html += `
-            <div class="quick-group">
-              <h6 class="text-white mt-3 mb-1">${group}</h6>
-              <div class="d-flex flex-wrap gap-2">
-          `;
-      imgs.forEach((img) => {
-        const title =
-          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
-        html += buildQuickImgItem(img, title);
-      });
-      html += `</div></div>`;
-    }
+    $(".add-image-to-panel").click(function () {
+      const id = $(this).closest("[data-panel-id]").data("panel-id");
+      const input = document.createElement("input");
+      console.log(id);
+      console.log(storyboardState);
+      input.type = "file";
+      input.accept = "image/*";
+      input.multiple = true;
+      input.onchange = async (e) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+        const urls = await uploadFilesAndGetUrls(files);
+        const panel = storyboardState.panels.find((p) => p.panel_id === id);
+        panel.images = panel.images.concat(urls);
 
-    // 渲染场景
-    for (const [group, imgs] of Object.entries(byCategory["场景"])) {
-      html += `
-            <div class="quick-group">
-              <h6 class="text-white mt-3 mb-1">${group}</h6>
-              <div class="d-flex flex-wrap gap-2">
-          `;
-      imgs.forEach((img) => {
-        const title =
-          getViewTypeLabel(img.viewType) + (img.note ? `（${img.note}）` : "");
-        html += buildQuickImgItem(img, title);
-      });
-      html += `</div></div>`;
-    }
-
-    // 渲染未分类
-    if (byCategory["未分类"].length > 0) {
-      html += `
-            <div class="quick-group">
-              <h6 class="text-white mt-3 mb-1 text-secondary">未分类</h6>
-              <div class="d-flex flex-wrap gap-2">
-          `;
-      byCategory["未分类"].forEach((img) => {
-        const title = img.group || "";
-        html += buildQuickImgItem(img, title);
-      });
-      html += `</div></div>`;
-    }
-
-    // —————— 4. 插入 HTML ——————
-    // $renderTarget.html(html);
-    $renderTarget.append($(html));
-
-    // —————— 5. 绑定交互事件 ——————
-    const $target = $renderTarget;
-
-    // 点击预览
-    // 重新绑定事件（使用事件委托）
-    $target.off("click").on("click", ".quick-img-item", function (e) {
-      if ($(e.target).closest(".dropdown").length) return;
-
-      const $img = $(this).find("img");
-      const src = $img.attr("src");
-      const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
-
-      if (!img) return;
-
-      // 构造 fake item，兼容 showHistoryDetailModal
-      const fakeItem = {
-        id: "quick-" + Date.now(), // 无真实 ID，但用于唯一标识
-        result_paths: [img.localPath || ""],
-        result_urls: [img.remoteUrl || ""],
-        input_paths: [],
-        input_urls: [],
-        timestamp: img.addedAt || new Date().toISOString(),
-        params: {
-          prompt: "(来自快捷访问)",
-          size: "2K",
-          aspect_ratio: "auto",
-        },
+        renderPanels();
+        applyUniformAspectRatio();
+        updateSaveButton();
       };
-
-      // 调用全局模态框函数（需确保此函数在 window 作用域或可访问）
-      if (typeof window.showHistoryDetailModal === "function") {
-        window.showHistoryDetailModal(fakeItem);
-      } else {
-        // 兜底：直接加参考图（兼容旧版）
-        const success = window.AIImageState?.addFromQuickAccess(
-          img.localPath,
-          img.remoteUrl,
-        );
-        if (success && window.UploadModule?.renderPreview) {
-          window.UploadModule.renderPreview();
-        }
-      }
+      input.click();
     });
+  }
 
-    $target
-      .off("dragstart")
-      .on("dragstart", ".quick-img-item img", function (e) {
-        const $img = $(this);
-        const src = $img.attr("src");
-        const img = images.find((i) => (i.localPath || i.remoteUrl) === src);
-        if (!img) return;
-
-        const itemData = {
-          localPath: img.localPath,
-          remoteUrl: img.remoteUrl,
-        };
-        window.__draggedItem = itemData;
-        window.__dragOrigin = "quick"; // 标记来源是快捷栏
-
-        const originalEvent = e.originalEvent;
-        const ghost = this.cloneNode(true);
-        ghost.style.width = "100px";
-        ghost.style.height = "100px";
-        ghost.style.opacity = "0.9";
-        ghost.style.borderRadius = "4px";
-        ghost.style.objectFit = "contain";
-        ghost.style.pointerEvents = "none";
-        const ghostDiv = document.createElement("div");
-        ghostDiv.appendChild(ghost);
-        ghostDiv.style.position = "absolute";
-        ghostDiv.style.top = "-9999px";
-        document.body.appendChild(ghostDiv);
-
-        originalEvent.dataTransfer.setDragImage(ghostDiv, 40, 40);
-
-        const cleanup = () => {
-          if (ghostDiv.parentNode) ghostDiv.parentNode.removeChild(ghostDiv);
-          document.removeEventListener("dragend", cleanup);
-        };
-        document.addEventListener("dragend", cleanup);
-
-        // 延迟显示拖拽目标，但排除“快捷访问”区域
-        setTimeout(() => {
-          $("#dragTargetOverlay").show();
-          // 隐藏快捷访问目标图标（如果是从快捷栏拖出）
-          if (window.__dragOrigin === "quick") {
-            $(`.drag-target-item[data-target="quick"]`).hide();
-          }
-        }, 100);
+  async function uploadFilesAndGetUrls(files) {
+    const urls = [];
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("file", file);
+      const resp = await fetch("/quick-upload", {
+        method: "POST",
+        body: formData,
       });
+      const data = await resp.json();
+      if (data.local_path) {
+        urls.push(data.local_path); // e.g., /uploads/xxx.jpg
+      } else {
+        throw new Error("上传失败");
+      }
+    }
+    return urls;
+  }
 
-    // 标签设置
-    $target
-      .off("click", ".quick-tag-btn")
-      .on("click", ".quick-tag-btn", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const index = $(this).data("index");
-        const tag = $(this).data("tag");
-        setTag(index, tag);
-      });
+  function updateSaveButton() {
+    const hasContent = storyboardState.panels.some((p) => p.images.length > 0);
+    $("#saveStoryboardBtn").prop("disabled", !hasContent);
+  }
 
-    // 设置标题
-    // 替换原 .quick-title-btn 逻辑
-    $target
-      .off("click", ".quick-title-btn")
-      .on("click", ".quick-title-btn", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const index = $(this).data("index");
-        const img = images[index];
-        if (img) {
-          showAddQuickAccessModal(img); // ← 改为编辑模式
-        }
-      });
+  // ===== 入口：从拖拽系统调用 =====
+  window.enterStoryboardMode = function (items) {
+    const imageRefs = items
+      .map((item) => item.localPath || item.remoteUrl)
+      .filter(Boolean);
+    if (imageRefs.length === 0) return;
 
-    // 删除
-    $target
-      .off("click", ".quick-delete-btn")
-      .on("click", ".quick-delete-btn", function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const index = $(this).data("index");
-        removeImage(index);
-      });
+    // 1. 切换到故事板 Tab
+    const storyboardTabBtn = document.querySelector("#storyboard-tab");
+    if (storyboardTabBtn) {
+      const tab = new bootstrap.Tab(storyboardTabBtn);
+      tab.show();
+    }
 
-    // 初始化 Bootstrap dropdown（如果未自动初始化）
-    if (typeof bootstrap !== "undefined" && bootstrap.Dropdown) {
-      $target.find('[data-bs-toggle="dropdown"]').each(function () {
-        new bootstrap.Dropdown(this);
+    // 2. 确保占位提示隐藏（即使首次进入）
+    //$("#storyboardPlaceholder").removeClass("d-flex").hide();
+    $("#storyboardPanels").show();
+
+    // 3. 添加新分镜
+    addPanel({
+      images: imageRefs,
+      description: "",
+      cameraMovement: "fixed",
+      cameraNote: "",
+    });
+  };
+
+  // ===== 保存 =====
+  async function saveStoryboard() {
+    const data = {
+      id: storyboardState.currentId, // 可能为 null
+      title: storyboardState.title,
+      panels: storyboardState.panels.map((p) => ({
+        panel_id: p.panel_id,
+        images: p.images,
+        description: p.description,
+        camera_movement: p.cameraMovement,
+        camera_note: p.cameraNote,
+      })),
+    };
+
+    try {
+      const resp = await fetch("/save-storyboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
       });
+      const result = await resp.json();
+      if (result.success) {
+        storyboardState.currentId = result.record_id; // 新建时更新 ID
+        storyboardState.title = data.title;
+        loadStoryboardList(); // 刷新下拉菜单
+        showToast("故事板保存成功！", "success", 5000);
+        window.shouldHighlightNewRecords = true;
+
+        loadStoryboardListIntoDropdown();
+        // document.querySelector('button[data-bs-target="#quick-gen"]').click();
+      } else {
+        throw new Error(result.error || "保存失败");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("保存失败：" + err.message, "error", 5000);
     }
   }
 
-  load();
-  return {
-    addImage,
-    renderSidebar,
-    getImages: () => [...images],
-  };
+  async function switchToStoryboard(id) {
+    // 如果当前有内容，提示保存（可选）
+    if (storyboardState.panels.length > 0 && storyboardState.currentId) {
+      const shouldSave = confirm("当前故事板有修改，是否先保存？");
+      if (shouldSave) {
+        await saveStoryboard(); // 你已有的保存函数
+      }
+    }
+
+    if (id === "__new__") {
+      // 新建
+      storyboardState = {
+        currentId: null,
+        title: "未命名故事板",
+        panels: [],
+      };
+    } else if (id) {
+      // 加载已有
+      try {
+        const resp = await fetch(`/load-storyboard/${id}`);
+        const data = await resp.json();
+        storyboardState = {
+          currentId: data.id,
+          title: data.title || "未命名故事板",
+          panels: data.panels || [],
+        };
+      } catch (err) {
+        showToast("加载失败", "error");
+        return;
+      }
+    } else {
+      // 选择“—请选择—”，清空
+      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
+    }
+
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
+    loadStoryboardListIntoDropdown();
+    // 更新下拉框选中状态（已在 loadStoryboardList 中处理）
+  }
+
+  $("#storyboardSelector").change(function () {
+    const id = $(this).val();
+    switchToStoryboard(id);
+  });
+
+  //新建
+  $(document).on(
+    "click",
+    "#storyboardDropdownMenu [data-action='new']",
+    function (e) {
+      e.preventDefault();
+      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
+      renderPanels();
+      applyUniformAspectRatio();
+      updateSaveButton();
+      resetStoryboard(); // 清空当前，新建
+      $("#storyboardTitle").text("未命名故事板").focus();
+    },
+  );
+
+  $(document).on(
+    "click",
+    "#storyboardDropdownMenu .dropdown-item[data-id]",
+    function (e) {
+      e.preventDefault();
+      const id = $(this).data("id");
+      switchToStoryboard(id);
+    },
+  );
+
+  // 切换到编辑模式
+  function startEditingTitle() {
+    const text = $("#storyboardTitleText").text();
+    $("#storyboardTitleInput").val(text).removeClass("d-none");
+    $("#storyboardTitleText").hide();
+    $("#editTitleBtn").hide();
+    $("#storyboardTitleInput").focus().select(); // 全选方便编辑
+  }
+
+  // 保存并退出编辑
+  function finishEditingTitle() {
+    const newTitle = $("#storyboardTitleInput").val().trim() || "未命名故事板";
+    $("#storyboardTitleText").text(newTitle);
+    $("#storyboardTitleInput").addClass("d-none");
+    $("#storyboardTitleText").show();
+    $("#editTitleBtn").show();
+    storyboardState.title = newTitle;
+  }
+
+  // 绑定事件
+  $("#storyboardTitleText, #editTitleBtn").on("click", startEditingTitle);
+  $("#storyboardTitleInput").on("blur", finishEditingTitle);
+  $("#storyboardTitleInput").on("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finishEditingTitle();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      $("#storyboardTitleInput").blur();
+    }
+  });
+
+  // 初始化
+  init();
+  // loadStoryboardList();
+  loadStoryboardListIntoDropdown();
 })();
+
+

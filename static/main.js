@@ -1,10 +1,45 @@
 // main.js
 //
+// 全局 z-index 计数器
+let currentTopZIndex = 1050;
+
+function bringWindowToFront(el) {
+  if (!el.classList.contains("floating-window")) return;
+  currentTopZIndex += 1;
+  el.style.zIndex = currentTopZIndex;
+}
 
 (function () {
   const state = window.AIImageState;
   // 全局变量记录当前页
   let currentHistoryWindowPage = 1;
+
+  // 历史窗口分页
+  function loadHistoryWindowPage(page, limit = 12) {
+    currentHistoryWindowPage = page;
+    $.get(`/history?page=${page}&limit=${limit}`, function (data) {
+      let html = "";
+      data.records.forEach((item) => {
+        const url = item.result_paths[0] || "";
+        html += `
+          <div class="col-6 col-sm-4 col-md-3 mb-3">
+            <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+
+                <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
+
+            </div>
+          </div>
+        `;
+      });
+      $("#historyWindowList").html(html);
+
+      let pg = "";
+      for (let i = 1; i <= data.pages; i++) {
+        pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
+      }
+      $("#historyWindowPagination").html(pg);
+    });
+  }
 
   // ===== 提示词预览 =====
   function updatePromptPreview() {
@@ -22,18 +57,20 @@
     } else if ($("#modeCharacter").is(":checked")) {
       // 角色模式逻辑
       const views = [];
+      const scenes = [];
       if ($("#viewFront").is(":checked")) views.push("正面全身");
       if ($("#viewSide").is(":checked")) views.push("侧面全身");
       if ($("#viewBack").is(":checked")) views.push("背面全身");
       if ($("#viewFace").is(":checked")) views.push("面部特写");
-      if ($("#viewSolidBg").is(":checked")) views.push("纯色背景");
+
+      if ($("#viewSolidBg").is(":checked")) scenes.push("纯色背景");
 
       if (views.length === 0) {
         text = "（请至少选择一个视角）";
       } else {
-        const viewText = views.join("和");
+        const viewText = views.join("和") + ", " + scenes.join(", ");
         const notes = $("#characterNotes").val().trim();
-        text = `给我一个这个角色的${viewText}。要求角色面部特征保持一致。${notes ? " " + notes : ""}`;
+        text = `给我一个这个角色的${viewText}。${notes ? " " + notes : ""}`;
       }
     }
     $("#promptPreview").text(text || "（提示词为空）");
@@ -356,15 +393,10 @@
         }
 
         try {
-          const resp = await fetch(usableLocal);
-          if (!resp.ok) throw new Error("无法读取本地图片");
-          const blob = await resp.blob();
-          const formData = new FormData();
-          formData.append("file", blob, "reference.jpg");
-
-          const uploadRes = await fetch("/quick-upload", {
+          const uploadRes = await fetch("/quick-upload-2", {
             method: "POST",
-            body: formData,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ local_path: usableLocal }),
           });
 
           if (!uploadRes.ok) throw new Error("上传失败");
@@ -400,15 +432,17 @@
     // ===== 工具条弹窗控制 =====
     $(document).on("click", ".tool-btn", function () {
       const target = $(this).data("target");
+      let win;
       if (target === "quick-access") {
-        $("#quickAccessWindow").removeClass("d-none");
+        win = $("#quickAccessWindow").removeClass("d-none");
         window.QuickAccess?.renderSidebar(
           "#quickAccessWindow .quick-images-container",
         );
       } else if (target === "history-window") {
-        $("#historyWindow").removeClass("d-none");
+        win = $("#historyWindow").removeClass("d-none");
         loadHistoryWindowPage(1);
       }
+      if (win) bringWindowToFront(win[0]);
     });
 
     // 关闭窗口
@@ -421,33 +455,6 @@
       }
     });
 
-    // 历史窗口分页
-    function loadHistoryWindowPage(page, limit = 12) {
-      currentHistoryWindowPage = page;
-      $.get(`/history?page=${page}&limit=${limit}`, function (data) {
-        let html = "";
-        data.records.forEach((item) => {
-          const url = item.result_paths[0] || "";
-          html += `
-            <div class="col-6 col-sm-4 col-md-3 mb-3">
-              <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-
-                  <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
-
-              </div>
-            </div>
-          `;
-        });
-        $("#historyWindowList").html(html);
-
-        let pg = "";
-        for (let i = 1; i <= data.pages; i++) {
-          pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
-        }
-        $("#historyWindowPagination").html(pg);
-      });
-    }
-
     $(document).on(
       "click",
       "#historyWindowPagination .page-link",
@@ -458,8 +465,8 @@
         const win = document.getElementById("historyWindow");
         const containerWidth =
           win?.querySelector(".history-content")?.clientWidth || 400;
-        const limit = calculateHistoryItemsPerPage(containerWidth);
-        loadHistoryWindowPage(page, limit);
+        //const limit = calculateHistoryItemsPerPage(containerWidth);
+        loadHistoryWindowPage(page);
       },
     );
 
@@ -488,6 +495,7 @@
 
       function dragMouseDown(e) {
         e.preventDefault();
+        bringWindowToFront(winEl);
         pos3 = e.clientX;
         pos4 = e.clientY;
         document.onmouseup = closeDragElement;
@@ -537,7 +545,8 @@
 
         // 来源：历史记录
         if ($(this).closest("#historyWindow").length) {
-          const item = $(this).data("history-item");
+          const item = $(this).parent("div").data("item");
+          console.log(item);
           if (item) {
             itemData = {
               type: "history",
@@ -651,8 +660,8 @@
         let newHeight = rect.height + dy;
 
         // 限制 min/max
-        newWidth = Math.min(800, Math.max(300, newWidth));
-        newHeight = Math.min(600, Math.max(200, newHeight));
+        newWidth = Math.min(1200, Math.max(300, newWidth));
+        newHeight = Math.min(800, Math.max(200, newHeight));
 
         win.style.width = newWidth + "px";
         win.style.height = newHeight + "px";
@@ -687,16 +696,16 @@
       };
     }
 
-    const debouncedReloadHistoryWindow = debounce(() => {
-      const win = document.getElementById("historyWindow");
-      if (!win) return;
+    // const debouncedReloadHistoryWindow = debounce(() => {
+    //   const win = document.getElementById("historyWindow");
+    //   if (!win) return;
 
-      const containerWidth = win.querySelector(".history-content").clientWidth;
-      const newLimit = calculateHistoryItemsPerPage(containerWidth);
+    //   const containerWidth = win.querySelector(".history-content").clientWidth;
+    //   const newLimit = calculateHistoryItemsPerPage(containerWidth);
 
-      // 可选：存入全局或闭包，避免重复加载相同 limit
-      loadHistoryWindowPage(currentHistoryWindowPage, newLimit);
-    }, 300);
+    //   // 可选：存入全局或闭包，避免重复加载相同 limit
+    //   loadHistoryWindowPage(currentHistoryWindowPage, newLimit);
+    // }, 300);
 
     makeResizable("#quickAccessWindow");
     makeResizable("#historyWindow");

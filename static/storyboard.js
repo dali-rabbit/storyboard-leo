@@ -1,4 +1,4 @@
-// storyboard.js - 故事板编辑器
+// storyboard.js - 故事板编辑器（完整版，含拖动排序 + 动画反馈）
 (() => {
   const PANEL_MAX_COUNT = 12;
   const CAMERA_MOVEMENTS = [
@@ -14,28 +14,41 @@
     { value: "track_forward", label: "前进跟拍" },
     { value: "track_backward", label: "后退跟拍" },
     { value: "handheld", label: "手持晃动" },
-    { value: "crane_up", label: " crane 上升" },
-    { value: "crane_down", label: " crane 下降" },
+    { value: "crane_up", label: "crane 上升" },
+    { value: "crane_down", label: "crane 下降" },
     { value: "static_with_focus_rack", label: "固定 + 焦点转移" },
     { value: "other", label: "其他（请说明）" },
   ];
 
   let storyboardState = {
-    currentId: null, // 当前打开的故事板 ID
-    title: "未命名故事板", // 当前标题
+    currentId: null,
+    title: "未命名故事板",
     panels: [],
+    lastModified: null, // 新增字段
   };
 
-  // 获取所有已保存的故事板（从本地 storyboards/ 目录）
+  // 控制图片拖放上传是否启用
+  let imageDropEnabled = true;
+
+  // ======================
+  // 工具函数
+  // ======================
+
+  function enableImageDrop(enable) {
+    imageDropEnabled = enable;
+  }
+
+  // ======================
+  // 网络 & 存储
+  // ======================
+
   async function loadStoryboardList() {
     try {
       const resp = await fetch("/list-storyboards");
       const list = await resp.json();
       const select = $("#storyboardSelector");
-      // 保留前两个选项（—选择— 和 新建）
       const staticOptions = select.find("option:lt(2)").clone();
       select.empty().append(staticOptions);
-      // 添加已保存的故事板
       list.forEach((sb) => {
         const opt = $(
           `<option value="${sb.id}">${sb.title || "未命名"}</option>`,
@@ -54,8 +67,15 @@
     try {
       const resp = await fetch("/list-storyboards");
       const list = await resp.json();
+
+      // 按 last_modified 降序排序（最新在前）
+      list.sort((a, b) => {
+        const aTime = a.last_modified ? new Date(a.last_modified) : new Date(0);
+        const bTime = b.last_modified ? new Date(b.last_modified) : new Date(0);
+        return bTime - aTime;
+      });
+
       const menu = $("#storyboardDropdownMenu");
-      // 清空动态部分（保留前两项：新建 + 分割线）
       menu.find("li:not(:first-child):not(:nth-child(2))").remove();
       list.forEach((sb) => {
         const isActive = sb.id === storyboardState.currentId;
@@ -63,28 +83,44 @@
           <li>
             <a class="dropdown-item ${isActive ? "active" : ""}" href="#" data-id="${sb.id}">
               ${sb.title || "未命名故事板"}
+              <small class="text-muted d-block">${sb.last_modified ? new Date(sb.last_modified).toLocaleString() : ""}</small>
             </a>
           </li>
         `);
         menu.append(li);
       });
+
+      // 如果当前没有故事板，且列表非空 → 自动加载最新一个
+      if (
+        !storyboardState.currentId &&
+        list.length > 0 &&
+        !storyboardState.panels.length
+      ) {
+        setTimeout(() => {
+          switchToStoryboard(list[0].id);
+        }, 100);
+      }
     } catch (err) {
       console.error("加载故事板列表失败", err);
     }
   }
 
+  // ======================
+  // 拖放上传（图片拖入分镜）
+  // ======================
+
   function bindDropZoneEvents() {
     const container = document.getElementById("storyboardPanels");
     if (!container) return;
 
-    // 全局：阻止默认 dragover 行为（否则无法 drop）
     container.addEventListener("dragover", (e) => {
+      if (!imageDropEnabled) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
     });
 
-    // 拖入某个分镜的 .panel-images 区域
     container.addEventListener("dragenter", (e) => {
+      if (!imageDropEnabled) return;
       const target = e.target.closest(".panel-images");
       if (target) {
         target.classList.add("storyboard-drop-target");
@@ -92,9 +128,9 @@
     });
 
     container.addEventListener("dragleave", (e) => {
+      if (!imageDropEnabled) return;
       const target = e.target.closest(".panel-images");
       if (target) {
-        // 防止子元素 leave 触发父元素 leave
         const related = e.relatedTarget;
         if (!target.contains(related)) {
           target.classList.remove("storyboard-drop-target");
@@ -102,21 +138,18 @@
       }
     });
 
-    // 核心：drop 事件
     container.addEventListener("drop", async (e) => {
+      if (!imageDropEnabled) return;
       e.preventDefault();
       const url = e.dataTransfer.getData("text/plain");
       if (!url) return;
 
-      // 清除所有高亮
       container.querySelectorAll(".storyboard-drop-target").forEach((el) => {
         el.classList.remove("storyboard-drop-target");
       });
 
-      // 判断是否 drop 到某个分镜的 .panel-images
       const panelImages = e.target.closest(".panel-images");
       if (panelImages) {
-        // 情况2：添加到指定分镜
         const panelId = panelImages.closest("[data-panel-id]").dataset.panelId;
         const panel = storyboardState.panels.find(
           (p) => p.panel_id === panelId,
@@ -129,7 +162,6 @@
           showToast("图片已添加到分镜", "success", 2000);
         }
       } else {
-        // 情况1：故事板为空 OR 拖到空白区域 → 新建分镜
         if (storyboardState.panels.length === 0) {
           addPanel({
             images: [url],
@@ -139,88 +171,136 @@
           });
           showToast("已创建新分镜并添加图片", "success", 2000);
         } else {
-          // 可选：也可以提示“请拖到具体分镜区域”
           showToast("请将图片拖到具体分镜卡片内", "info", 2000);
         }
       }
     });
   }
 
-  function init() {
-    renderPanels();
-    applyUniformAspectRatio();
-    bindGlobalEvents();
-    bindDropZoneEvents();
-  }
+  // ======================
+  // 拖动排序（分镜卡片）
+  // ======================
 
-  function bindGlobalEvents() {
-    $("#storyboardTitle").on("blur input", function () {
-      const newTitle = $(this).text().trim() || "未命名故事板";
-      $(this).text(newTitle);
-      storyboardState.title = newTitle;
-      // 可选：自动保存草稿（或仅标记 dirty）
+  let dragState = {
+    dragging: false,
+    sourceElement: null,
+  };
+
+  function setupDragSort() {
+    const container = document.getElementById("storyboardPanels");
+    if (!container) return;
+
+    // 移除旧监听器
+    container.querySelectorAll("[draggable]").forEach((el) => {
+      el.removeEventListener("dragstart", handleDragStart);
+      el.removeEventListener("dragend", handleDragEnd);
     });
+    container.removeEventListener("dragover", handleDragOver);
+    container.removeEventListener("drop", handleDrop);
 
-    $("#newStoryboardBtn").click(resetStoryboard);
-
-    $("#addStoryboardPanelBtn").click(() => {
-      if (storyboardState.panels.length >= PANEL_MAX_COUNT) {
-        showToast(`最多支持 ${PANEL_MAX_COUNT} 个分镜`, "error", 5000);
-        return;
-      }
-      addPanel({
-        images: [],
-        description: "",
-        cameraMovement: "fixed",
-        cameraNote: "",
-      });
+    // 绑定新监听器
+    container.querySelectorAll("[draggable]").forEach((el) => {
+      el.addEventListener("dragstart", handleDragStart);
+      el.addEventListener("dragend", handleDragEnd);
     });
-
-    $("#saveStoryboardBtn").click(saveStoryboard);
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
   }
 
-  // 清空当前故事板，开始新的
-  function resetStoryboard() {
-    if (storyboardState.panels.length > 0) {
-      if (
-        !confirm("当前故事板有内容，确定要新建一个吗？未保存的内容将丢失。")
-      ) {
-        return;
-      }
-    }
-    storyboardState.panels = [];
-    renderPanels();
-    applyUniformAspectRatio();
-    updateSaveButton();
-  }
+  function handleDragStart(e) {
+    dragState.dragging = true;
+    dragState.sourceElement = e.target.closest(".col-12");
+    if (!dragState.sourceElement) return;
 
-  function addPanel(data) {
-    const panel_id = data.panel_id || crypto.randomUUID();
-    storyboardState.panels.push({ panel_id, ...data });
-    console.log(storyboardState);
-    renderPanels();
-    applyUniformAspectRatio();
-    updateSaveButton();
-    document
-      .getElementById("storyboardPanels")
-      .scrollIntoView({ behavior: "smooth" });
-    //$("#storyboardPlaceholder").removeClass("d-flex").hide();
-  }
+    dragState.sourceElement.style.opacity = "0.4";
+    dragState.sourceElement.classList.add("dragging");
 
-  function removePanel(id) {
-    storyboardState.panels = storyboardState.panels.filter(
-      (p) => p.panel_id !== id,
+    enableImageDrop(false);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(
+      "text/plain",
+      dragState.sourceElement.dataset.panelId,
     );
+  }
+
+  function handleDragEnd(e) {
+    dragState.dragging = false;
+    if (dragState.sourceElement) {
+      dragState.sourceElement.style.opacity = "";
+      dragState.sourceElement.classList.remove("dragging");
+    }
+    enableImageDrop(true);
+
+    // 清除高亮
+    document.querySelectorAll(".drag-insert-hint").forEach((el) => {
+      el.classList.remove("drag-insert-hint");
+    });
+  }
+
+  function handleDragOver(e) {
+    if (!dragState.dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+
+    const targetCol = e.target.closest(".col-12");
+    if (!targetCol || targetCol === dragState.sourceElement) return;
+
+    // 清除旧高亮
+    document.querySelectorAll(".drag-insert-hint").forEach((el) => {
+      el.classList.remove("drag-insert-hint");
+    });
+
+    targetCol.classList.add("drag-insert-hint");
+    return false;
+  }
+
+  function handleDrop(e) {
+    if (!dragState.dragging || !dragState.sourceElement) return;
+    e.preventDefault();
+
+    const targetCol = e.target.closest(".col-12");
+    if (!targetCol || targetCol === dragState.sourceElement) {
+      handleDragEnd(e);
+      return;
+    }
+
+    const sourceId = dragState.sourceElement.dataset.panelId;
+    const targetId = targetCol.dataset.panelId;
+
+    const panels = storyboardState.panels;
+    const sourceIndex = panels.findIndex((p) => p.panel_id === sourceId);
+    const targetIndex = panels.findIndex((p) => p.panel_id === targetId);
+
+    if (sourceIndex === -1 || targetIndex === -1) {
+      handleDragEnd(e);
+      return;
+    }
+
+    // 重排序
+    const [moved] = panels.splice(sourceIndex, 1);
+    panels.splice(targetIndex, 0, moved);
+
+    // 添加淡入动画反馈
     renderPanels();
     applyUniformAspectRatio();
     updateSaveButton();
+
+    // 触发轻微动画反馈
+    const allCards = document.querySelectorAll("#storyboardPanels .col-12");
+    allCards.forEach((card, idx) => {
+      card.style.transition = "transform 0.3s ease, opacity 0.3s ease";
+      card.style.transform = "scale(1.02)";
+      setTimeout(() => {
+        card.style.transform = "scale(1)";
+      }, 150);
+    });
+
+    handleDragEnd(e);
   }
 
-  function updatePanel(id, updates) {
-    const panel = storyboardState.panels.find((p) => p.panel_id === id);
-    if (panel) Object.assign(panel, updates);
-    updateSaveButton();
-  }
+  // ======================
+  // 渲染与事件绑定
+  // ======================
 
   function renderPanels() {
     const container = $("#storyboardPanels");
@@ -238,38 +318,54 @@
       container.show();
       $("#storyboardTitleInput").val(storyboardState.title);
       $("#storyboardTitleText").text(storyboardState.title);
+
       let html = "";
-      storyboardState.panels.forEach((panel) => {
+      storyboardState.panels.forEach((panel, index) => {
+        const panelNumber = index + 1;
         const imgHtml =
           panel.images.length === 0
             ? '<div class="text-center text-muted py-3">上传或拖入已有图片</div>'
             : panel.images
                 .map(
-                  (url, idx) =>
-                    `<a href="${url}" data-lightbox="panel-${panel.panel_id}" style="position:absolute; top:0; left:0; width:90%; height:90%; " class="panel-image-stack-link"><img src="${url}"  class="panel-image-stack" style="z-index:${panel.images.length - idx}"></a>`,
+                  (url, idx) => `
+                  <div class="panel-image-wrapper" style="position:relative; flex:1; height:200px;">
+                    <a href="${url}" data-lightbox="panel-${panel.panel_id}" class="d-block h-100">
+                      <img src="${url}" class="panel-image-stack w-100 h-100" style="object-fit:cover; position:absolute; top:0; left:0;">
+                    </a>
+                    <button type="button" class="btn btn-danger btn-sm remove-image-btn"
+                      data-url="${url}"
+                      style="position:absolute; top:4px; right:4px; opacity:0; transition:opacity 0.2s; z-index:10;">
+                      ×
+                    </button>
+                  </div>
+                `,
                 )
                 .join("");
 
         const cameraOptions = CAMERA_MOVEMENTS.map(
           (opt) =>
-            `<option value="${opt.value}" ${panel.camera_movement === opt.value ? "selected" : ""}>${opt.label}</option>`,
+            `<option value="${opt.value}" ${panel.cameraMovement === opt.value ? "selected" : ""}>${opt.label}</option>`,
         ).join("");
 
         html += `
-          <div class="col-12 col-md-6 col-lg-4" data-panel-id="${panel.panel_id}">
+          <div class="col-12 col-md-6 col-lg-4" data-panel-id="${panel.panel_id}" draggable="true">
             <div class="card h-100">
               <div class="card-header d-flex justify-content-between align-items-center">
-                <select class="form-select form-select-sm camera-movement">
-                  ${cameraOptions}
-                </select>
+                <span class="panel-number">${panelNumber}</span>
                 <button type="button" class="btn-close btn-sm remove-panel" aria-label="删除"></button>
               </div>
               <div class="card-body d-flex flex-column">
-                <div class="panel-images mb-2" style="  display:flex;   gap:2px;">
+                <div class="panel-images mb-2 d-flex" style="gap:2px; position:relative;">
                   ${imgHtml}
                 </div>
                 <button type="button" class="btn btn-outline-secondary btn-sm mb-2 add-image-to-panel">+ 添加图片</button>
-                <textarea class="form-control description mb-2" rows="2" placeholder="镜头描述、对白等...">${panel.description}</textarea>
+
+                <!-- 镜头类型（移到中间） -->
+                <select class="form-select form-select-sm camera-movement mb-2">
+                  ${cameraOptions}
+                </select>
+
+                <textarea class="form-control description" rows="2" placeholder="镜头描述、对白等...">${panel.description}</textarea>
                 <textarea class="form-control camera-note ${panel.cameraMovement === "other" ? "" : "d-none"}" rows="1" placeholder="请说明运镜方式...">${panel.cameraNote}</textarea>
               </div>
             </div>
@@ -278,34 +374,7 @@
       });
       container.html(html);
       setupPanelEvents();
-    }
-  }
-
-  // 计算并应用统一的图片宽高比
-  async function applyUniformAspectRatio() {
-    const panels = storyboardState.panels;
-    if (panels.length === 0 || panels[0].images.length === 0) {
-      // 没有参考图，恢复默认样式
-      $(".panel-images").css("aspect-ratio", "");
-      return;
-    }
-
-    const firstImageUrl = panels[0].images[0];
-    try {
-      // 加载图片并获取原始宽高
-      const img = new Image();
-      await new Promise((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error("加载参考图失败"));
-        img.src = firstImageUrl;
-      });
-
-      const aspectRatio = img.naturalWidth / img.naturalHeight;
-      // 应用到所有 .panel-images 容器
-      $(".panel-images").css("aspect-ratio", `${aspectRatio}`);
-    } catch (err) {
-      console.warn("无法获取第一张图的尺寸，使用默认比例", err);
-      $(".panel-images").css("aspect-ratio", "");
+      setupDragSort(); // 重要：每次渲染后重新绑定拖拽
     }
   }
 
@@ -336,8 +405,6 @@
     $(".add-image-to-panel").click(function () {
       const id = $(this).closest("[data-panel-id]").data("panel-id");
       const input = document.createElement("input");
-      console.log(id);
-      console.log(storyboardState);
       input.type = "file";
       input.accept = "image/*";
       input.multiple = true;
@@ -346,14 +413,70 @@
         if (files.length === 0) return;
         const urls = await uploadFilesAndGetUrls(files);
         const panel = storyboardState.panels.find((p) => p.panel_id === id);
-        panel.images = panel.images.concat(urls);
-
-        renderPanels();
-        applyUniformAspectRatio();
-        updateSaveButton();
+        if (panel) {
+          panel.images = panel.images.concat(urls);
+          renderPanels();
+          applyUniformAspectRatio();
+          updateSaveButton();
+        }
       };
       input.click();
     });
+
+    const container = $("#storyboardPanels");
+    // 图片删除按钮的 hover 显示
+    container.on("mouseenter", ".panel-image-wrapper", function () {
+      $(this).find(".remove-image-btn").css("opacity", "1");
+    });
+
+    container.on("mouseleave", ".panel-image-wrapper", function () {
+      $(this).find(".remove-image-btn").css("opacity", "0");
+    });
+
+    // 删除图片
+    container.on("click", ".remove-image-btn", function (e) {
+      e.stopPropagation();
+      const urlToRemove = $(this).data("url");
+      const panelId = $(this).closest("[data-panel-id]").data("panel-id");
+      const panel = storyboardState.panels.find((p) => p.panel_id === panelId);
+      if (panel) {
+        panel.images = panel.images.filter((url) => url !== urlToRemove);
+        renderPanels();
+        applyUniformAspectRatio();
+        updateSaveButton();
+        showToast("图片已删除", "info", 2000);
+      }
+    });
+  }
+
+  // ======================
+  // 核心 CRUD
+  // ======================
+
+  function addPanel(data) {
+    const panel_id = data.panel_id || crypto.randomUUID();
+    storyboardState.panels.push({ panel_id, ...data });
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
+    document
+      .getElementById("storyboardPanels")
+      .scrollIntoView({ behavior: "smooth" });
+  }
+
+  function removePanel(id) {
+    storyboardState.panels = storyboardState.panels.filter(
+      (p) => p.panel_id !== id,
+    );
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
+  }
+
+  function updatePanel(id, updates) {
+    const panel = storyboardState.panels.find((p) => p.panel_id === id);
+    if (panel) Object.assign(panel, updates);
+    updateSaveButton();
   }
 
   async function uploadFilesAndGetUrls(files) {
@@ -367,7 +490,7 @@
       });
       const data = await resp.json();
       if (data.local_path) {
-        urls.push(data.local_path); // e.g., /uploads/xxx.jpg
+        urls.push(data.local_path);
       } else {
         throw new Error("上传失败");
       }
@@ -380,37 +503,16 @@
     $("#saveStoryboardBtn").prop("disabled", !hasContent);
   }
 
-  // ===== 入口：从拖拽系统调用 =====
-  window.enterStoryboardMode = function (items) {
-    const imageRefs = items
-      .map((item) => item.localPath || item.remoteUrl)
-      .filter(Boolean);
-    if (imageRefs.length === 0) return;
+  // ======================
+  // 保存与加载
+  // ======================
 
-    // 1. 切换到故事板 Tab
-    const storyboardTabBtn = document.querySelector("#storyboard-tab");
-    if (storyboardTabBtn) {
-      const tab = new bootstrap.Tab(storyboardTabBtn);
-      tab.show();
-    }
-
-    // 2. 确保占位提示隐藏（即使首次进入）
-    //$("#storyboardPlaceholder").removeClass("d-flex").hide();
-    $("#storyboardPanels").show();
-
-    // 3. 添加新分镜
-    addPanel({
-      images: imageRefs,
-      description: "",
-      cameraMovement: "fixed",
-      cameraNote: "",
-    });
-  };
-
-  // ===== 保存 =====
   async function saveStoryboard() {
+    const now = new Date().toISOString(); // 标准格式，便于排序
+    storyboardState.lastModified = now;
+
     const data = {
-      id: storyboardState.currentId, // 可能为 null
+      id: storyboardState.currentId,
       title: storyboardState.title,
       panels: storyboardState.panels.map((p) => ({
         panel_id: p.panel_id,
@@ -429,14 +531,12 @@
       });
       const result = await resp.json();
       if (result.success) {
-        storyboardState.currentId = result.record_id; // 新建时更新 ID
+        storyboardState.currentId = result.record_id;
         storyboardState.title = data.title;
-        loadStoryboardList(); // 刷新下拉菜单
+        loadStoryboardList();
         showToast("故事板保存成功！", "success", 5000);
         window.shouldHighlightNewRecords = true;
-
         loadStoryboardListIntoDropdown();
-        // document.querySelector('button[data-bs-target="#quick-gen"]').click();
       } else {
         throw new Error(result.error || "保存失败");
       }
@@ -447,23 +547,16 @@
   }
 
   async function switchToStoryboard(id) {
-    // 如果当前有内容，提示保存（可选）
     if (storyboardState.panels.length > 0 && storyboardState.currentId) {
       const shouldSave = confirm("当前故事板有修改，是否先保存？");
       if (shouldSave) {
-        await saveStoryboard(); // 你已有的保存函数
+        await saveStoryboard();
       }
     }
 
     if (id === "__new__") {
-      // 新建
-      storyboardState = {
-        currentId: null,
-        title: "未命名故事板",
-        panels: [],
-      };
+      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
     } else if (id) {
-      // 加载已有
       try {
         const resp = await fetch(`/load-storyboard/${id}`);
         const data = await resp.json();
@@ -477,7 +570,6 @@
         return;
       }
     } else {
-      // 选择“—请选择—”，清空
       storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
     }
 
@@ -485,49 +577,99 @@
     applyUniformAspectRatio();
     updateSaveButton();
     loadStoryboardListIntoDropdown();
-    // 更新下拉框选中状态（已在 loadStoryboardList 中处理）
   }
 
-  $("#storyboardSelector").change(function () {
-    const id = $(this).val();
-    switchToStoryboard(id);
-  });
+  // ======================
+  // 初始化 & 全局事件
+  // ======================
 
-  //新建
-  $(document).on(
-    "click",
-    "#storyboardDropdownMenu [data-action='new']",
-    function (e) {
-      e.preventDefault();
-      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
-      renderPanels();
-      applyUniformAspectRatio();
-      updateSaveButton();
-      resetStoryboard(); // 清空当前，新建
-      $("#storyboardTitle").text("未命名故事板").focus();
-    },
-  );
+  function init() {
+    renderPanels();
+    applyUniformAspectRatio();
+    bindGlobalEvents();
+    bindDropZoneEvents();
+  }
 
-  $(document).on(
-    "click",
-    "#storyboardDropdownMenu .dropdown-item[data-id]",
-    function (e) {
-      e.preventDefault();
-      const id = $(this).data("id");
+  function bindGlobalEvents() {
+    $("#storyboardTitle").on("blur input", function () {
+      const newTitle = $(this).text().trim() || "未命名故事板";
+      $(this).text(newTitle);
+      storyboardState.title = newTitle;
+    });
+
+    $("#newStoryboardBtn").click(resetStoryboard);
+    $("#addStoryboardPanelBtn").click(() => {
+      if (storyboardState.panels.length >= PANEL_MAX_COUNT) {
+        showToast(`最多支持 ${PANEL_MAX_COUNT} 个分镜`, "error", 5000);
+        return;
+      }
+      addPanel({
+        images: [],
+        description: "",
+        cameraMovement: "fixed",
+        cameraNote: "",
+      });
+    });
+    $("#saveStoryboardBtn").click(saveStoryboard);
+
+    $("#storyboardSelector").change(function () {
+      const id = $(this).val();
       switchToStoryboard(id);
-    },
-  );
+    });
 
-  // 切换到编辑模式
+    $(document).on(
+      "click",
+      "#storyboardDropdownMenu [data-action='new']",
+      function (e) {
+        e.preventDefault();
+        resetStoryboard();
+        $("#storyboardTitle").text("未命名故事板").focus();
+      },
+    );
+
+    $(document).on(
+      "click",
+      "#storyboardDropdownMenu .dropdown-item[data-id]",
+      function (e) {
+        e.preventDefault();
+        const id = $(this).data("id");
+        switchToStoryboard(id);
+      },
+    );
+
+    // 编辑标题
+    $("#storyboardTitleText, #editTitleBtn").on("click", startEditingTitle);
+    $("#storyboardTitleInput").on("blur", finishEditingTitle);
+    $("#storyboardTitleInput").on("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finishEditingTitle();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        $(this).blur();
+      }
+    });
+  }
+
+  function resetStoryboard() {
+    if (storyboardState.panels.length > 0) {
+      if (!confirm("当前故事板有内容，确定要新建一个吗？未保存的内容将丢失。"))
+        return;
+    }
+    storyboardState.panels = [];
+    renderPanels();
+    applyUniformAspectRatio();
+    updateSaveButton();
+  }
+
   function startEditingTitle() {
     const text = $("#storyboardTitleText").text();
     $("#storyboardTitleInput").val(text).removeClass("d-none");
     $("#storyboardTitleText").hide();
     $("#editTitleBtn").hide();
-    $("#storyboardTitleInput").focus().select(); // 全选方便编辑
+    $("#storyboardTitleInput").focus().select();
   }
 
-  // 保存并退出编辑
   function finishEditingTitle() {
     const newTitle = $("#storyboardTitleInput").val().trim() || "未命名故事板";
     $("#storyboardTitleText").text(newTitle);
@@ -537,21 +679,63 @@
     storyboardState.title = newTitle;
   }
 
-  // 绑定事件
-  $("#storyboardTitleText, #editTitleBtn").on("click", startEditingTitle);
-  $("#storyboardTitleInput").on("blur", finishEditingTitle);
-  $("#storyboardTitleInput").on("keydown", function (e) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      finishEditingTitle();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      $("#storyboardTitleInput").blur();
-    }
-  });
+  // ======================
+  // 外部入口
+  // ======================
 
-  // 初始化
+  window.enterStoryboardMode = function (items) {
+    const imageRefs = items
+      .map((item) => item.localPath || item.remoteUrl)
+      .filter(Boolean);
+    if (imageRefs.length === 0) return;
+
+    const storyboardTabBtn = document.querySelector("#storyboard-tab");
+    if (storyboardTabBtn) {
+      const tab = new bootstrap.Tab(storyboardTabBtn);
+      tab.show();
+    }
+
+    $("#storyboardPanels").show();
+    addPanel({
+      images: imageRefs,
+      description: "",
+      cameraMovement: "fixed",
+      cameraNote: "",
+    });
+  };
+
+  // ======================
+  // 图片比例
+  // ======================
+
+  async function applyUniformAspectRatio() {
+    const panels = storyboardState.panels;
+    if (panels.length === 0 || panels[0].images.length === 0) {
+      $(".panel-images").css("aspect-ratio", "");
+      return;
+    }
+
+    const firstImageUrl = panels[0].images[0];
+    try {
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("加载参考图失败"));
+        img.src = firstImageUrl;
+      });
+
+      const aspectRatio = img.naturalWidth / img.naturalHeight;
+      $(".panel-images").css("aspect-ratio", `${aspectRatio}`);
+    } catch (err) {
+      console.warn("无法获取第一张图的尺寸，使用默认比例", err);
+      $(".panel-images").css("aspect-ratio", "");
+    }
+  }
+
+  // ======================
+  // 启动
+  // ======================
+
   init();
-  // loadStoryboardList();
   loadStoryboardListIntoDropdown();
 })();

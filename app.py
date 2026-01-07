@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime
 from io import BytesIO
@@ -18,6 +19,10 @@ from PIL import Image
 from plugins import get_face_swap_plugin
 from test_gen_api import generate_via_image_fallback
 from uploader import UploadError, upload_file
+
+# 缓存文件路径（可放在项目根目录或 instance/ 等位置）
+CACHE_FILE = "history/upload.cache"
+cache_lock = threading.Lock()  # 简单线程锁，避免并发写冲突
 
 load_dotenv()
 
@@ -323,6 +328,78 @@ def quick_upload():
     except Exception as e:
         print(f"[Quick Upload Error] {e}")
         return jsonify({"error": "External upload failed"}), 500
+
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[Cache Load Error] {e}")
+            return {}
+    return {}
+
+
+def save_cache(cache):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Cache Save Error] {e}")
+
+
+@app.route("/quick-upload-2", methods=["POST"])
+def quick_upload_2():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # 安全处理路径：移除开头的斜杠（你已做），并标准化
+    local_path = data.get("local_path", "")
+    if not local_path or not isinstance(local_path, str):
+        return jsonify({"error": "Invalid local_path"}), 400
+
+    # 标准化路径（防止 ../ 等）
+    local_path = os.path.normpath(local_path.lstrip("/"))
+    if local_path.startswith("..") or os.path.isabs(local_path):
+        return jsonify({"error": "Invalid path"}), 400
+
+    full_local_path = os.path.join(os.getcwd(), local_path)  # 假设相对当前工作目录
+    if not os.path.exists(full_local_path):
+        return jsonify({"error": "File not found"}), 404
+
+    # 读取缓存
+    with cache_lock:
+        cache = load_cache()
+        if local_path in cache:
+            # 命中缓存，直接返回
+            return jsonify(
+                {
+                    "url": cache[local_path],
+                    "local_path": "/" + local_path.replace("\\", "/"),
+                    "cached": True,
+                }
+            )
+
+        # 未命中，执行上传
+        try:
+            external_url = upload_file(
+                full_local_path, os.path.basename(full_local_path)
+            )
+            # 写入缓存
+            cache[local_path] = external_url
+            save_cache(cache)
+            return jsonify(
+                {
+                    "url": external_url,
+                    "local_path": "/" + local_path.replace("\\", "/"),
+                    "cached": False,
+                }
+            )
+        except Exception as e:
+            print(f"[Quick Upload Error] {e}")
+            return jsonify({"error": "External upload failed"}), 500
 
 
 @app.route("/save-cropped-images", methods=["POST"])

@@ -53,13 +53,10 @@ window.QuickAccess = (function () {
 
     if (usableLocal && !usableRemote) {
       try {
-        const resp = await fetch(usableLocal);
-        const blob = await resp.blob();
-        const formData = new FormData();
-        formData.append("file", blob, "quick.jpg");
-        const uploadRes = await fetch("/quick-upload", {
+        const uploadRes = await fetch("/quick-upload-2", {
           method: "POST",
-          body: formData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ local_path: usableLocal }),
         });
         if (uploadRes.ok) {
           const data = await uploadRes.json();

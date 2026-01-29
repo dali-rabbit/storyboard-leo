@@ -67,12 +67,23 @@
             </button>
         </div>
         <div class="container my-4">
-            <!-- 标题 + 标签 -->
+            <!-- 标题 + 影片选择器 + 标签 -->
             <div class="d-flex flex-column mb-4">
                 <div
                     class="d-flex justify-content-between align-items-start mb-4"
                 >
-                    <h1 class="mb-0">🦁 分镜狮</h1>
+                    <div class="d-flex align-items-center gap-3">
+                        <h1 class="mb-0">🦁 分镜狮</h1>
+                        <!-- 影片选择器 -->
+                        <div class="dropdown" id="filmSelector">
+                            <button class="btn btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                <span class="current-film-name">加载中...</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-dark">
+                                <!-- 动态填充 -->
+                            </ul>
+                        </div>
+                    </div>
                     <!-- 顶部标签（选项卡） -->
                     <ul class="nav nav-tabs ms-4" id="topTabs" role="tablist">
                         <li class="nav-item" role="presentation">
@@ -616,6 +627,16 @@
                                         <!-- 动态故事板列表将插入到这里 -->
                                     </ul>
                                 </div>
+                                <!-- 新增删除按钮（紧贴下拉按钮右侧） -->
+                                <button
+                                    id="deleteStoryboardBtn"
+                                    class="btn btn-outline-danger ms-2"
+                                    type="button"
+                                    style="display: none"
+                                    title="删除当前故事板"
+                                >
+                                    🗑️
+                                </button>
                             </div>
                             <div class="d-flex gap-2">
                                 <button
@@ -740,6 +761,7 @@
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.4/js/lightbox.min.js"></script>
         <script src="{{ url_for('static', filename='state.js') }}"></script>
+        <script src="{{ url_for('static', filename='film-manager.js') }}"></script>
         <script src="{{ url_for('static', filename='upload.js') }}"></script>
         <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
         <script src="{{ url_for('static', filename='image-edit.js') }}"></script>

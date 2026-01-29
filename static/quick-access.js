@@ -1,23 +1,32 @@
 // static/quick-access.js
+// 快捷访问模块 - 数据存储在服务器（按影片隔离）
+
 window.QuickAccess = (function () {
-  const STORAGE_KEY = "quickAccessImages";
   let images = [];
   let currentFilter = "all"; // "all", "角色", "场景"
+  let currentFilmId = null;
 
-  function load() {
+  // 加载数据（从服务器）
+  async function load(filmId) {
+    currentFilmId = filmId;
+    if (!filmId) {
+      images = [];
+      return;
+    }
+    
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      images = saved ? JSON.parse(saved) : [];
+      const res = await fetch(`/api/films/${filmId}/quick-access`);
+      if (!res.ok) throw new Error("加载失败");
+      images = await res.json();
+      
+      // 数据迁移（老格式兼容）
       images.forEach((img) => {
-        // 迁移老数据
         if (img.tag && img.tag !== "全部") {
-          // 老 tag → category
           img.category = img.tag;
           img.group = img.title || img.tag;
           delete img.tag;
           delete img.title;
         } else if (!img.category) {
-          // 未分类：把 title 作为 group
           img.category = null;
           img.group = img.title || "";
           delete img.tag;
@@ -26,12 +35,24 @@ window.QuickAccess = (function () {
         if (!img.addedAt) img.addedAt = new Date().toISOString();
       });
     } catch (e) {
+      console.error("[QuickAccess] 加载失败:", e);
       images = [];
     }
   }
 
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(images));
+  // 保存数据（到服务器）
+  async function save() {
+    if (!currentFilmId) return;
+    
+    try {
+      await fetch(`/api/films/${currentFilmId}/quick-access`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(images)
+      });
+    } catch (e) {
+      console.error("[QuickAccess] 保存失败:", e);
+    }
   }
 
   async function addImage({ localPath, remoteUrl }) {
@@ -73,14 +94,29 @@ window.QuickAccess = (function () {
       }
     }
 
-    images.push({
+    const newImage = {
       localPath: usableLocal,
       remoteUrl: usableRemote,
       addedAt: new Date().toISOString(),
       tag: "全部",
-      title: "", // ← 新增
-    });
-    save();
+      title: "",
+    };
+    
+    images.push(newImage);
+    
+    // 保存到服务器
+    if (currentFilmId) {
+      try {
+        await fetch(`/api/films/${currentFilmId}/quick-access`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newImage)
+        });
+      } catch (e) {
+        console.error("[QuickAccess] 添加失败:", e);
+      }
+    }
+    
     renderSidebar();
   }
 
@@ -100,9 +136,20 @@ window.QuickAccess = (function () {
     }
   }
 
-  function removeImage(index) {
+  async function removeImage(index) {
+    const img = images[index];
+    if (!img || !currentFilmId) return;
+    
     images.splice(index, 1);
-    save();
+    
+    try {
+      await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(img.localPath)}`, {
+        method: "DELETE"
+      });
+    } catch (e) {
+      console.error("[QuickAccess] 删除失败:", e);
+    }
+    
     renderSidebar();
   }
 
@@ -250,7 +297,7 @@ window.QuickAccess = (function () {
 
       $("#qaDynamicFields").html(fieldsHtml);
 
-      // 切换“其他…”时显示输入框
+      // 切换"其他…"时显示输入框
       $("#qaGroupSelect")
         .off("change")
         .on("change", function () {
@@ -327,6 +374,19 @@ window.QuickAccess = (function () {
         newImage.remoteUrl = window.__currentQuickAddImage.remoteUrl;
         newImage.addedAt = new Date().toISOString();
         images.push(newImage);
+        
+        // 保存到服务器
+        if (currentFilmId) {
+          try {
+            await fetch(`/api/films/${currentFilmId}/quick-access`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(newImage)
+            });
+          } catch (e) {
+            console.error("[QuickAccess] 添加失败:", e);
+          }
+        }
       } else {
         // 编辑：替换原数据
         const idx = images.findIndex(
@@ -334,10 +394,23 @@ window.QuickAccess = (function () {
             i.localPath === imgData.localPath &&
             i.remoteUrl === imgData.remoteUrl,
         );
-        if (idx !== -1) images[idx] = newImage;
+        if (idx !== -1) {
+          images[idx] = newImage;
+          // 更新服务器
+          if (currentFilmId) {
+            try {
+              await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(newImage.localPath)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(newImage)
+              });
+            } catch (e) {
+              console.error("[QuickAccess] 更新失败:", e);
+            }
+          }
+        }
       }
 
-      save();
       renderSidebar();
       modal.hide();
     });
@@ -351,8 +424,16 @@ window.QuickAccess = (function () {
               i.localPath === imgData.localPath &&
               i.remoteUrl === imgData.remoteUrl,
           );
-          if (idx !== -1) images.splice(idx, 1);
-          save();
+          if (idx !== -1) {
+            const img = images[idx];
+            images.splice(idx, 1);
+            // 从服务器删除
+            if (currentFilmId) {
+              fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(img.localPath)}`, {
+                method: "DELETE"
+              }).catch(e => console.error("[QuickAccess] 删除失败:", e));
+            }
+          }
           renderSidebar();
           modal.hide();
         }
@@ -379,9 +460,6 @@ window.QuickAccess = (function () {
   }
 
   function buildQuickImgItem(img, title) {
-    const originalIndex = images.findIndex(
-      (i) => i.localPath === img.localPath && i.remoteUrl === img.remoteUrl,
-    );
     const titleDisplay = title
       ? `<div class="quick-img-title text-center small text-white bg-black bg-opacity-50 px-1" style="position:absolute;bottom:0;left:0;right:0;">${title}</div>`
       : "";
@@ -393,8 +471,8 @@ window.QuickAccess = (function () {
       <div class="dropdown" style="position:absolute;top:-8px;right:-8px;">
         <button class="btn btn-sm btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown" style="width:20px;height:20px;padding:0;font-size:10px;line-height:1;">⋮</button>
         <ul class="dropdown-menu p-1" style="font-size:12px;">
-          <li><a class="dropdown-item quick-title-btn" href="#" data-index="${originalIndex}">编辑详情</a></li>
-          <li><a class="dropdown-item text-danger quick-delete-btn" href="#" data-index="${originalIndex}">删除</a></li>
+          <li><a class="dropdown-item quick-title-btn" href="#">编辑详情</a></li>
+          <li><a class="dropdown-item text-danger quick-delete-btn" href="#">删除</a></li>
         </ul>
       </div>
     </div>
@@ -594,7 +672,7 @@ window.QuickAccess = (function () {
         };
         document.addEventListener("dragend", cleanup);
 
-        // 延迟显示拖拽目标，但排除“快捷访问”区域
+        // 延迟显示拖拽目标，但排除"快捷访问"区域
         setTimeout(() => {
           $("#dragTargetOverlay").show();
           // 隐藏快捷访问目标图标（如果是从快捷栏拖出）
@@ -615,15 +693,15 @@ window.QuickAccess = (function () {
         setTag(index, tag);
       });
 
-    // 设置标题
-    // 替换原 .quick-title-btn 逻辑
+    // 设置标题/编辑详情
     $target
       .off("click", ".quick-title-btn")
       .on("click", ".quick-title-btn", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        const index = $(this).data("index");
-        const img = images[index];
+        // 使用 localPath 作为唯一标识查找图片（避免过滤后索引错位）
+        const localPath = $(this).closest(".quick-img-item").find("img").attr("src");
+        const img = images.find((i) => (i.localPath || i.remoteUrl) === localPath);
         if (img) {
           showAddQuickAccessModal(img); // ← 改为编辑模式
         }
@@ -635,8 +713,12 @@ window.QuickAccess = (function () {
       .on("click", ".quick-delete-btn", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        const index = $(this).data("index");
-        removeImage(index);
+        // 使用 localPath 作为唯一标识（避免过滤后索引错位）
+        const localPath = $(this).closest(".quick-img-item").find("img").attr("src");
+        const idx = images.findIndex((i) => (i.localPath || i.remoteUrl) === localPath);
+        if (idx !== -1) {
+          removeImage(idx);
+        }
       });
 
     // 初始化 Bootstrap dropdown（如果未自动初始化）
@@ -647,8 +729,8 @@ window.QuickAccess = (function () {
     }
   }
 
-  load();
   return {
+    load,
     addImage,
     renderSidebar,
     getImages: () => [...images],

@@ -513,16 +513,19 @@ document
 
     // 保存到后端
     try {
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+      
       let resp = await fetch("/save-cropped-images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images: dataUrls }),
+        body: JSON.stringify({ images: dataUrls, film_id: filmId }),
       });
       let result = await resp.json();
       if (!result.success) throw new Error("Save failed");
 
       const record = {
         id: crypto.randomUUID(),
+        film_id: filmId,
         timestamp: new Date().toISOString(),
         local_result_paths: result.local_paths,
         input_paths: [],
@@ -646,6 +649,9 @@ document.getElementById("swapFaceBtn").addEventListener("click", async () => {
 
       const formData = new FormData();
       formData.append("file", originalBlob, "original_for_swap.jpg");
+      
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+      formData.append("film_id", filmId);
 
       const uploadResp = await fetch("/quick-upload", {
         method: "POST",
@@ -661,10 +667,11 @@ document.getElementById("swapFaceBtn").addEventListener("click", async () => {
       const sourceUrl = uploadData.url; // canvas 图的 ImgBB URL
 
       // 4. 调用换脸接口（你已提供伪接口）
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
       const swapResp = await fetch("/swap_face", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_url: sourceUrl, face_url: faceUrl }),
+        body: JSON.stringify({ source_url: sourceUrl, face_url: faceUrl, film_id: filmId }),
       });
 
       const swapData = await swapResp.json();

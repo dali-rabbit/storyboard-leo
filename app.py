@@ -16,11 +16,18 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from PIL import Image
 
+from film_manager import (
+    create_film, delete_film, get_film, list_films, update_film,
+    get_film_history_dir, get_film_storyboards_dir, get_film_quick_access_path,
+    load_quick_access, save_quick_access, add_quick_access_image,
+    update_quick_access_image, remove_quick_access_image,
+    init_default_film, migrate_existing_data, DEFAULT_FILM_ID
+)
 from plugins import get_face_swap_plugin
 from test_gen_api import generate_via_image_fallback
 from uploader import UploadError, upload_file
 
-# 缓存文件路径（可放在项目根目录或 instance/ 等位置）
+# 缓存文件路径（按影片隔离）
 CACHE_FILE = "history/upload.cache"
 cache_lock = threading.Lock()  # 简单线程锁，避免并发写冲突
 
@@ -30,26 +37,40 @@ IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 SESSION_KEY = os.getenv("SESSION_KEY")
 
 
-# 配置
-HISTORY_DIR = Path("history")
-HISTORY_DIR.mkdir(exist_ok=True)
-
 # 避免重复提交（简单任务锁）
 current_task_lock = Lock()
 is_generating = False
 
-# 保存输入图片
-INPUT_IMAGES_DIR = HISTORY_DIR / "inputs"
-INPUT_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# 保存生成结果
-RESULTS_DIR = HISTORY_DIR / "results"
-RESULTS_DIR.mkdir(exist_ok=True)
-
 
 app = Flask(__name__)
 app.secret_key = SESSION_KEY  # 用于 session 安全
+
+
+# ========== 初始化影片系统 ==========
+def init_film_system():
+    """初始化影片系统，迁移现有数据"""
+    created, has_data = init_default_film()
+    if created and has_data:
+        print("[Film] 检测到现有数据，正在迁移到默认影片...")
+        result = migrate_existing_data()
+        print(f"[Film] 迁移完成: {result}")
+    elif created:
+        print("[Film] 已创建默认影片")
+
+
+init_film_system()
+
+
+# ========== 辅助函数：获取影片目录 ==========
+def get_film_dirs(film_id):
+    """获取影片的各目录路径"""
+    history_dir = get_film_history_dir(film_id)
+    return {
+        "history": history_dir,
+        "inputs": history_dir / "inputs",
+        "results": history_dir / "results",
+        "storyboards": get_film_storyboards_dir(film_id),
+    }
 
 
 def save_image_from_url(url: str, folder: Path) -> str:
@@ -119,7 +140,28 @@ def save_uploaded_file_as_jpg(file_storage, folder: Path) -> str:
 
 @app.route("/history/<path:filename>")
 def history_files(filename):
-    return send_from_directory(HISTORY_DIR, filename)
+    """支持影片隔离的历史文件访问"""
+    # 从文件名中提取影片 ID（路径格式: films/{film_id}/history/...）
+    if filename.startswith("films/"):
+        # 解析路径 films/{film_id}/history/inputs/xxx.jpg
+        # 或 films/{film_id}/history/results/xxx.jpg
+        parts = filename.split("/")
+        if len(parts) >= 4 and parts[2] == "history":
+            film_id = parts[1]
+            # 剩余路径如 inputs/xxx.jpg 或 results/xxx.jpg
+            sub_path = "/".join(parts[3:])
+            film_dir = get_film_history_dir(film_id)
+            full_path = film_dir / sub_path
+            if full_path.exists():
+                return send_from_directory(film_dir, sub_path)
+    
+    # 兼容旧格式 - 使用默认影片
+    film_dir = get_film_history_dir(DEFAULT_FILM_ID)
+    full_path = film_dir / filename
+    if full_path.exists():
+        return send_from_directory(film_dir, filename)
+    
+    return "File not found", 404
 
 
 @app.route("/")
@@ -130,8 +172,14 @@ def index():
 @app.route("/upload-images", methods=["POST"])
 def upload_images():
     files = request.files.getlist("images")
+    film_id = request.form.get("film_id", DEFAULT_FILM_ID)
+    
     if not files:
         return jsonify({"error": "No images provided"}), 400
+
+    # 获取影片目录
+    dirs = get_film_dirs(film_id)
+    dirs["inputs"].mkdir(parents=True, exist_ok=True)
 
     external_urls = []
     local_paths = []
@@ -142,10 +190,11 @@ def upload_images():
 
         # 1. 保存本地 JPG 副本（用于历史记录）
         file.stream.seek(0)
-        local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
+        local_path = save_uploaded_file_as_jpg(file, dirs["inputs"])
         if not local_path:
             continue
-        local_paths.append("/" + local_path.replace("\\", "/"))
+        # 返回 /history/ 开头的路径，与访问路由匹配
+        local_paths.append("/history/" + local_path.replace("\\", "/"))
 
         # 2. 上传到外部服务（ImgBB 或 GitHub+jsDelivr）
         try:
@@ -158,7 +207,10 @@ def upload_images():
             external_url = upload_file(tmp_path, file.filename)
             external_urls.append(external_url)
         except Exception as e:
-            print(f"[Upload External Error] {e}")
+            error_msg = str(e)
+            print(f"[Upload External Error] {error_msg}")
+            # 保存最后一个错误，用于返回给前端
+            upload_error = error_msg
             external_urls.append(None)
         finally:
             if "tmp_path" in locals():
@@ -169,7 +221,8 @@ def upload_images():
         (url, local) for url, local in zip(external_urls, local_paths) if url
     ]
     if not valid_records:
-        return jsonify({"error": "All uploads failed"}), 500
+        error_detail = locals().get('upload_error', 'Unknown error')
+        return jsonify({"error": f"All uploads failed: {error_detail}"}), 500
 
     external_urls, local_paths = zip(*valid_records)
     return jsonify({"urls": list(external_urls), "local_paths": list(local_paths)})
@@ -187,6 +240,7 @@ def generate():
         prompt = data.get("prompt", "").strip()
         size = data.get("size", "2K")
         aspect_ratio = data.get("aspect_ratio", "auto")
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
 
         if not prompt:
             return jsonify({"error": "Prompt is required"}), 400
@@ -197,7 +251,7 @@ def generate():
                 prompt=prompt,
                 size=size,
                 ar=aspect_ratio,
-                fallback_order=["nano_banana", "rh_official"],
+                fallback_order=["nano_banana"],
             )
         except Exception as e:
             return jsonify({"error": f"Generation failed: {str(e)}"}), 500
@@ -205,30 +259,26 @@ def generate():
         if not result_urls:
             return jsonify({"error": "All APIs failed to generate image"}), 500
 
+        # ✅ 获取影片目录
+        dirs = get_film_dirs(film_id)
+        dirs["results"].mkdir(parents=True, exist_ok=True)
+
         # ✅ 保存结果图到本地（从 result_urls 下载）
         local_result_paths = []
         for url in result_urls:
-            local_path = save_image_from_url(url, RESULTS_DIR)
+            local_path = save_image_from_url(url, dirs["results"])
             if local_path:
-                local_result_paths.append("/" + local_path.replace("\\", "/"))
+                local_result_paths.append("/history/" + local_path.replace("\\", "/"))
 
         if not local_result_paths:
             return jsonify({"error": "Failed to save result images locally"}), 500
-
-        # ✅ 获取对应的本地输入图路径（用于历史记录展示）
-        # 假设前端传的 image_urls 顺序和本地保存一致 —— 但更可靠的方式是前端传 local_paths？
-        # 简化方案：我们从历史中匹配（不完美），或让前端同时传 local_input_paths
-        # → 更好的做法：前端在 generate 时同时传 local_input_paths
-
-        # 为简化，我们暂不保存输入图本地路径到 record（或从已有文件推断）
-        # 实际上，你可以通过 image_urls 的文件名反推，但略复杂
-        # 建议：前端在 /generate 时额外传 `local_input_paths`
 
         local_input_paths = data.get("local_input_paths", [])
 
         record_id = str(uuid.uuid4())
         record = {
             "id": record_id,
+            "film_id": film_id,  # 关联影片
             "timestamp": datetime.now().isoformat(),
             "image_urls": image_urls,  # 外部 URL（用于调试）
             "local_input_paths": local_input_paths,
@@ -239,7 +289,7 @@ def generate():
             "aspect_ratio": aspect_ratio,
         }
 
-        record_path = HISTORY_DIR / f"{record_id}.json"
+        record_path = dirs["history"] / f"{record_id}.json"
         with open(record_path, "w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False, indent=2)
 
@@ -255,15 +305,21 @@ def generate():
 
 @app.route("/history")
 def get_history():
-    """分页获取历史记录（JSON 文件列表）"""
+    """分页获取历史记录（JSON 文件列表，按影片隔离）"""
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 12))
+    film_id = request.args.get("film_id", DEFAULT_FILM_ID)
+    
     if page < 1:
         page = 1
 
+    # 获取影片历史目录
+    dirs = get_film_dirs(film_id)
+    history_dir = dirs["history"]
+
     # 获取所有 JSON 文件，按时间倒序
     history_files = sorted(
-        HISTORY_DIR.glob("*.json"), key=os.path.getmtime, reverse=True
+        history_dir.glob("*.json"), key=os.path.getmtime, reverse=True
     )
 
     total = len(history_files)
@@ -310,10 +366,15 @@ def get_history():
 @app.route("/quick-upload", methods=["POST"])
 def quick_upload():
     file = request.files.get("file")
+    film_id = request.form.get("film_id", DEFAULT_FILM_ID)
+    
     if not file or not file.filename:
         return jsonify({"error": "No file"}), 400
 
-    local_path = save_uploaded_file_as_jpg(file, INPUT_IMAGES_DIR)
+    dirs = get_film_dirs(film_id)
+    dirs["inputs"].mkdir(parents=True, exist_ok=True)
+    
+    local_path = save_uploaded_file_as_jpg(file, dirs["inputs"])
     if not local_path:
         return jsonify({"error": "Save failed"}), 500
 
@@ -322,7 +383,7 @@ def quick_upload():
         return jsonify(
             {
                 "url": external_url,
-                "local_path": "/" + local_path.replace("\\", "/"),
+                "local_path": "/history/" + local_path.replace("\\", "/"),
             }
         )
     except Exception as e:
@@ -377,7 +438,7 @@ def quick_upload_2():
             return jsonify(
                 {
                     "url": cache[local_path],
-                    "local_path": "/" + local_path.replace("\\", "/"),
+                    "local_path": "/history/" + local_path.replace("\\", "/"),
                     "cached": True,
                 }
             )
@@ -393,7 +454,7 @@ def quick_upload_2():
             return jsonify(
                 {
                     "url": external_url,
-                    "local_path": "/" + local_path.replace("\\", "/"),
+                    "local_path": "/history/" + local_path.replace("\\", "/"),
                     "cached": False,
                 }
             )
@@ -404,12 +465,17 @@ def quick_upload_2():
 
 @app.route("/save-cropped-images", methods=["POST"])
 def save_cropped_images():
-    """接收 Base64 图片列表，保存到 history/results/，返回本地路径"""
+    """接收 Base64 图片列表，保存到影片的 results/，返回本地路径"""
     data = request.get_json()
     base64_images = data.get("images", [])  # list of "data:image/jpeg;base64,..."
+    film_id = data.get("film_id", DEFAULT_FILM_ID)
 
     if not base64_images:
         return jsonify({"error": "No images provided"}), 400
+
+    # 获取影片目录
+    dirs = get_film_dirs(film_id)
+    dirs["results"].mkdir(parents=True, exist_ok=True)
 
     saved_paths = []
     for b64_str in base64_images:
@@ -424,11 +490,11 @@ def save_cropped_images():
 
             # 生成唯一文件名
             filename = f"{uuid.uuid4().hex}.jpg"
-            filepath = RESULTS_DIR / filename
+            filepath = dirs["results"] / filename
             image.save(filepath, "JPEG", quality=92)
 
-            # 返回相对于项目根目录的路径（前端可直接 /history/results/... 访问）
-            rel_path = f"/{filepath.relative_to(Path('.')).as_posix()}"
+            # 返回 /history/ 开头的路径，与访问路由匹配
+            rel_path = f"/history/{filepath.relative_to(Path('.')).as_posix()}"
             saved_paths.append(rel_path)
         except Exception as e:
             print(f"[Save Cropped Image Error] {e}")
@@ -440,12 +506,16 @@ def save_cropped_images():
 @app.route("/history-record", methods=["POST"])
 def save_manual_history():
     data = request.get_json()
+    film_id = data.get("film_id", DEFAULT_FILM_ID)
+    
+    dirs = get_film_dirs(film_id)
+    
     i = 1
     for local_result_path in data.get("local_result_paths", []):
         record_data = copy.deepcopy(data)
         record_data["local_result_paths"] = [local_result_path]
         record_id = data.get("id", str(uuid.uuid4()))
-        record_path = HISTORY_DIR / f"{record_id}_{i}.json"
+        record_path = dirs["history"] / f"{record_id}_{i}.json"
         with open(record_path, "w", encoding="utf-8") as f:
             json.dump(record_data, f, ensure_ascii=False, indent=2)
         i += 1
@@ -456,9 +526,12 @@ def save_manual_history():
 def delete_history_record(record_id):
     """删除指定历史记录（JSON + 本地图片）"""
     try:
+        film_id = request.args.get("film_id", DEFAULT_FILM_ID)
+        dirs = get_film_dirs(film_id)
+        
         # 1. 找到 JSON 文件
         json_path = None
-        for f in HISTORY_DIR.glob("*.json"):
+        for f in dirs["history"].glob("*.json"):
             if f.stem.startswith(record_id):
                 json_path = f
                 break
@@ -552,6 +625,126 @@ def delete_history_record(record_id):
 #             return jsonify({"error": f"换脸失败: {str(e)}"}), 500
 
 
+# ========== 影片管理 API ==========
+
+@app.route("/api/films", methods=["GET"])
+def api_list_films():
+    """列出所有影片"""
+    return jsonify(list_films())
+
+
+@app.route("/api/films", methods=["POST"])
+def api_create_film():
+    """创建新影片"""
+    data = request.get_json()
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "影片名称不能为空"}), 400
+    
+    description = data.get("description", "").strip()
+    film = create_film(name, description)
+    return jsonify(film)
+
+
+@app.route("/api/films/<film_id>", methods=["GET"])
+def api_get_film(film_id):
+    """获取影片详情"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    return jsonify(film)
+
+
+@app.route("/api/films/<film_id>", methods=["PUT"])
+def api_update_film(film_id):
+    """更新影片信息"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    data = request.get_json()
+    name = data.get("name")
+    description = data.get("description")
+    cover_image = data.get("cover_image")
+    
+    updated = update_film(film_id, name, description, cover_image)
+    return jsonify(updated)
+
+
+@app.route("/api/films/<film_id>", methods=["DELETE"])
+def api_delete_film(film_id):
+    """删除影片"""
+    success, error = delete_film(film_id)
+    if not success:
+        return jsonify({"error": error}), 400 if "不能删除" in error else 404
+    return jsonify({"success": True})
+
+
+# ========== 快捷访问 API（按影片隔离） ==========
+
+@app.route("/api/films/<film_id>/quick-access", methods=["GET"])
+def api_get_quick_access(film_id):
+    """获取影片的快捷访问数据"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    return jsonify(load_quick_access(film_id))
+
+
+@app.route("/api/films/<film_id>/quick-access", methods=["POST"])
+def api_add_quick_access(film_id):
+    """添加图片到快捷访问"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    data = request.get_json()
+    image_data = {
+        "localPath": data.get("localPath"),
+        "remoteUrl": data.get("remoteUrl"),
+        "category": data.get("category"),
+        "group": data.get("group"),
+        "viewType": data.get("viewType"),
+        "note": data.get("note"),
+    }
+    
+    result = add_quick_access_image(film_id, image_data)
+    if result is None:
+        return jsonify({"error": "图片已存在"}), 409
+    return jsonify(result)
+
+
+@app.route("/api/films/<film_id>/quick-access/<path:local_path>", methods=["PUT"])
+def api_update_quick_access(film_id, local_path):
+    """更新快捷访问图片信息"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    # 补回前导斜杠（Flask path 会吃掉）
+    full_local_path = "/" + local_path if not local_path.startswith("/") else local_path
+    
+    data = request.get_json()
+    result = update_quick_access_image(film_id, full_local_path, data)
+    if not result:
+        return jsonify({"error": "图片不存在"}), 404
+    return jsonify(result)
+
+
+@app.route("/api/films/<film_id>/quick-access/<path:local_path>", methods=["DELETE"])
+def api_delete_quick_access(film_id, local_path):
+    """从快捷访问中移除图片"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    # 补回前导斜杠（Flask path 会吃掉）
+    full_local_path = "/" + local_path if not local_path.startswith("/") else local_path
+    
+    remove_quick_access_image(film_id, local_path)
+    return jsonify({"success": True})
+
+
 @app.route("/swap_face", methods=["POST"])
 def swap_face():
     """
@@ -561,6 +754,7 @@ def swap_face():
         data = request.get_json()
         source_url = data.get("source_url", "").strip()
         face_url = data.get("face_url", "").strip()
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
 
         if not source_url or not face_url:
             return jsonify({"error": "Missing source_url or face_url"}), 400
@@ -575,8 +769,9 @@ def swap_face():
         # 调用插件执行换脸
         result_url = swap_func(source_image_url=source_url, face_image_url=face_url)
 
-        # 保存结果到本地（统一管理）
-        local_path = save_image_from_url(result_url, RESULTS_DIR)
+        # 保存结果到本地（按影片隔离）
+        dirs = get_film_dirs(film_id)
+        local_path = save_image_from_url(result_url, dirs["results"])
         if not local_path:
             return jsonify({"error": "Failed to save swapped image locally"}), 500
 
@@ -584,7 +779,7 @@ def swap_face():
             {
                 "success": True,
                 "result_url": result_url,  # 外部 URL（调试用）
-                "local_path": "/" + local_path.replace("\\", "/"),  # 前端展示用
+                "local_path": "/history/" + local_path.replace("\\", "/"),  # 前端展示用
             }
         )
 
@@ -619,17 +814,15 @@ def dummy_swap_face():
         return jsonify({"error": "换脸失败"}), 500
 
 
-# 确保目录存在
-STORYBOARD_DIR = os.path.join(os.path.dirname(__file__), "storyboards")
-os.makedirs(STORYBOARD_DIR, exist_ok=True)
-
-
 @app.route("/save-storyboard", methods=["POST"])
 def save_storyboard():
     data = request.json
     if "panels" not in data:
         return jsonify({"success": False, "error": "无效数据"})
 
+    film_id = data.get("film_id", DEFAULT_FILM_ID)
+    dirs = get_film_dirs(film_id)
+    
     title = ""
     if "title" in data:
         title = data["title"]
@@ -654,13 +847,14 @@ def save_storyboard():
     record = {
         "title": title,
         "id": record_id,
+        "film_id": film_id,  # 关联影片
         "type": "storyboard",
         "timestamp": datetime.utcnow().isoformat(),
         "panels": data["panels"],  # 仅保存引用路径
     }
 
     # 保存为单个 JSON 文件
-    filepath = os.path.join(STORYBOARD_DIR, f"{record_id}.json")
+    filepath = dirs["storyboards"] / f"{record_id}.json"
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
 
@@ -669,10 +863,13 @@ def save_storyboard():
 
 @app.route("/list-storyboards", methods=["GET"])
 def list_storyboards():
+    film_id = request.args.get("film_id", DEFAULT_FILM_ID)
+    dirs = get_film_dirs(film_id)
+    
     files = []
-    for f in os.listdir(STORYBOARD_DIR):
+    for f in os.listdir(dirs["storyboards"]):
         if f.endswith(".json"):
-            with open(os.path.join(STORYBOARD_DIR, f), "r", encoding="utf-8") as fp:
+            with open(os.path.join(dirs["storyboards"], f), "r", encoding="utf-8") as fp:
                 try:
                     data = json.load(fp)
                     files.append(
@@ -691,12 +888,36 @@ def list_storyboards():
 
 @app.route("/load-storyboard/<id>", methods=["GET"])
 def load_storyboard(id):
-    filepath = os.path.join(STORYBOARD_DIR, f"{id}.json")
-    if not os.path.exists(filepath):
+    film_id = request.args.get("film_id", DEFAULT_FILM_ID)
+    dirs = get_film_dirs(film_id)
+    
+    filepath = dirs["storyboards"] / f"{id}.json"
+    if not filepath.exists():
         return jsonify({"error": "Not found"}), 404
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
     return jsonify(data)
+
+
+@app.route("/delete-storyboard/<id>", methods=["DELETE"])
+def delete_storyboard(id):
+    """删除指定 ID 的故事板（JSON 文件）"""
+    film_id = request.args.get("film_id", DEFAULT_FILM_ID)
+    dirs = get_film_dirs(film_id)
+    
+    if not id or not isinstance(id, str):
+        return jsonify({"success": False, "error": "Invalid ID"}), 400
+
+    filepath = dirs["storyboards"] / f"{id}.json"
+    if not filepath.exists():
+        return jsonify({"success": False, "error": "Story board not found"}), 404
+
+    try:
+        os.remove(filepath)
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"[Delete Storyboard Error] {e}")
+        return jsonify({"success": False, "error": "Failed to delete"}), 500
 
 
 if __name__ == "__main__":

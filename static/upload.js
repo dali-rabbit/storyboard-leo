@@ -212,6 +212,10 @@
 
     const formData = new FormData();
     convertedFiles.forEach((f) => formData.append("images", f));
+    
+    // 添加影片 ID
+    const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+    formData.append("film_id", filmId);
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/upload-images", true);
@@ -228,13 +232,21 @@
         state.addUploadedFiles(res.urls || [], res.local_paths || []);
         renderUploadPreview();
       } else {
-        alert("上传失败");
+        let errorMsg = "上传失败";
+        try {
+          const err = JSON.parse(xhr.responseText);
+          errorMsg = err.error || `HTTP ${xhr.status}: 上传失败`;
+        } catch (e) {
+          errorMsg = `HTTP ${xhr.status}: ${xhr.statusText}`;
+        }
+        alert(errorMsg);
+        console.error("[Upload Error]", xhr.status, xhr.responseText);
       }
     };
     xhr.onerror = function () {
       $progress.hide();
       $("#dropZone").show();
-      alert("上传请求失败");
+      alert("上传请求失败：网络错误或服务器无响应\n\n请检查：\n1. 网络连接\n2. ImgBB API Key 是否配置正确\n3. 查看控制台(F12)获取详细错误");
     };
     xhr.send(formData);
   }

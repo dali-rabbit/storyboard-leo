@@ -1,7 +1,7 @@
 // main.js
 //
 // 全局 z-index 计数器
-let currentTopZIndex = 1050;
+let currentTopZIndex = 5;
 
 function bringWindowToFront(el) {
   if (!el.classList.contains("floating-window")) return;
@@ -14,10 +14,49 @@ function bringWindowToFront(el) {
   // 全局变量记录当前页
   let currentHistoryWindowPage = 1;
 
+  // 初始化影片管理
+  async function initFilmManager() {
+    const filmId = await window.FilmManager.init();
+    
+    // 加载当前影片的快捷访问数据
+    await window.QuickAccess.load(filmId);
+    window.QuickAccess.renderSidebar();
+    
+    // 加载当前影片的历史记录
+    loadHistoryWindowPage(1);
+    
+    // 加载当前影片的故事板列表
+    if (window.StoryboardModule) {
+      window.StoryboardModule.loadStoryboardListIntoDropdown();
+    }
+    
+    // 注册影片切换回调
+    window.FilmManager.onFilmChange(async (film) => {
+      // 清空当前状态
+      state.clear();
+      if (window.UploadModule) {
+        window.UploadModule.renderPreview();
+      }
+      
+      // 加载新影片的快捷访问
+      await window.QuickAccess.load(film.id);
+      window.QuickAccess.renderSidebar();
+      
+      // 加载新影片的历史记录
+      loadHistoryWindowPage(1);
+      
+      // 加载新影片的故事板
+      if (window.StoryboardModule) {
+        window.StoryboardModule.loadStoryboardListIntoDropdown();
+      }
+    });
+  }
+
   // 历史窗口分页
   function loadHistoryWindowPage(page, limit = 12) {
     currentHistoryWindowPage = page;
-    $.get(`/history?page=${page}&limit=${limit}`, function (data) {
+    const filmId = window.FilmManager.getCurrentFilmId();
+    $.get(`/history?page=${page}&limit=${limit}&film_id=${filmId}`, function (data) {
       let html = "";
       data.records.forEach((item) => {
         const url = item.result_paths[0] || "";
@@ -89,6 +128,8 @@ function bringWindowToFront(el) {
     isGenerating = true;
     $(this).prop("disabled", true).text("生成中...");
 
+    const filmId = window.FilmManager.getCurrentFilmId();
+
     $.ajax({
       url: "/generate",
       method: "POST",
@@ -99,6 +140,7 @@ function bringWindowToFront(el) {
         prompt: prompt,
         size: $("#resolution").val(),
         aspect_ratio: $("#aspectRatio").val(),
+        film_id: filmId,
       }),
       success: function (res) {
         if (res.success) {
@@ -109,6 +151,8 @@ function bringWindowToFront(el) {
                                 <a href="${url}" data-lightbox="generated"><img src="${url}" class="img-fluid rounded" style="max-height:300px;"></a>
                                 <div class="mt-2">
                                     <a href="${url}" download class="btn btn-sm btn-outline-light">下载</a>
+                                    &nbsp;
+                                    <a href="javascript:void(0);" data-url="${url}" class="btn btn-sm btn-success" id="editGenerated" > 编辑</a>
                                 </div>
                             </div>
                         `;
@@ -155,7 +199,10 @@ function bringWindowToFront(el) {
   }
 
   // ===== 事件绑定 =====
-  $(document).ready(function () {
+  $(document).ready(async function () {
+    // 初始化影片管理
+    await initFilmManager();
+    
     // 模式切换
     $('input[name="mode"]').change(function () {
       $("#rawSection").toggle(this.value === "raw");
@@ -181,7 +228,6 @@ function bringWindowToFront(el) {
 
     // 初始化
     updatePromptPreview();
-    loadHistoryWindowPage(1);
 
     // 如果你希望在切换标签时执行某些 JS 逻辑（例如懒加载、初始化组件等），可以监听 Bootstrap 的 shown.bs.tab 事件：
     document.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
@@ -374,6 +420,12 @@ function bringWindowToFront(el) {
       bootstrap.Modal.getInstance(
         document.getElementById("historyDetailModal"),
       )?.hide();
+      $(".btn-close[data-dismiss='history-window']").trigger("click");
+    });
+    // 编辑按钮（刚生成的图片）
+    $(document).on("click", "#editGenerated", function () {
+      const localPathAsUrl = $(this).data("url");
+      enterImageEditMode({ localPath: localPathAsUrl, remoteUrl: null });
     });
 
     // 新增：作为参考图

@@ -30,6 +30,9 @@ ENV/
 
 # 历史数据（可选）
 history/
+archives/
+storyboards/
+films/
 
 
 # Flask instance folder

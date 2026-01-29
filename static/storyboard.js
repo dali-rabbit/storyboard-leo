@@ -24,7 +24,8 @@
     currentId: null,
     title: "未命名故事板",
     panels: [],
-    lastModified: null, // 新增字段
+    lastModified: null,
+    dirty: false, // 脏状态
   };
 
   // 控制图片拖放上传是否启用
@@ -44,7 +45,8 @@
 
   async function loadStoryboardList() {
     try {
-      const resp = await fetch("/list-storyboards");
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+      const resp = await fetch(`/list-storyboards?film_id=${filmId}`);
       const list = await resp.json();
       const select = $("#storyboardSelector");
       const staticOptions = select.find("option:lt(2)").clone();
@@ -65,13 +67,14 @@
 
   async function loadStoryboardListIntoDropdown() {
     try {
-      const resp = await fetch("/list-storyboards");
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+      const resp = await fetch(`/list-storyboards?film_id=${filmId}`);
       const list = await resp.json();
 
-      // 按 last_modified 降序排序（最新在前）
+      // 按 timestamp 降序排序（最新在前）
       list.sort((a, b) => {
-        const aTime = a.last_modified ? new Date(a.last_modified) : new Date(0);
-        const bTime = b.last_modified ? new Date(b.last_modified) : new Date(0);
+        const aTime = a.timestamp ? new Date(a.timestamp) : new Date(0);
+        const bTime = b.timestamp ? new Date(b.timestamp) : new Date(0);
         return bTime - aTime;
       });
 
@@ -83,7 +86,7 @@
           <li>
             <a class="dropdown-item ${isActive ? "active" : ""}" href="#" data-id="${sb.id}">
               ${sb.title || "未命名故事板"}
-              <small class="text-muted d-block">${sb.last_modified ? new Date(sb.last_modified).toLocaleString() : ""}</small>
+              <small class="text-muted d-block">${sb.timestamp ? new Date(sb.timestamp).toLocaleString() : ""}</small>
             </a>
           </li>
         `);
@@ -242,14 +245,15 @@
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
 
-    const targetCol = e.target.closest(".col-12");
-    if (!targetCol || targetCol === dragState.sourceElement) return;
-
-    // 清除旧高亮
+    // 清除所有高亮（关键修复点）
     document.querySelectorAll(".drag-insert-hint").forEach((el) => {
       el.classList.remove("drag-insert-hint");
     });
 
+    const targetCol = e.target.closest(".col-12");
+    if (!targetCol || targetCol === dragState.sourceElement) return;
+
+    // 仅高亮当前悬停目标
     targetCol.classList.add("drag-insert-hint");
     return false;
   }
@@ -279,6 +283,7 @@
     // 重排序
     const [moved] = panels.splice(sourceIndex, 1);
     panels.splice(targetIndex, 0, moved);
+    storyboardState.dirty = true;
 
     // 添加淡入动画反馈
     renderPanels();
@@ -456,6 +461,7 @@
   function addPanel(data) {
     const panel_id = data.panel_id || crypto.randomUUID();
     storyboardState.panels.push({ panel_id, ...data });
+    storyboardState.dirty = true;
     renderPanels();
     applyUniformAspectRatio();
     updateSaveButton();
@@ -468,6 +474,7 @@
     storyboardState.panels = storyboardState.panels.filter(
       (p) => p.panel_id !== id,
     );
+    storyboardState.dirty = true;
     renderPanels();
     applyUniformAspectRatio();
     updateSaveButton();
@@ -475,15 +482,20 @@
 
   function updatePanel(id, updates) {
     const panel = storyboardState.panels.find((p) => p.panel_id === id);
-    if (panel) Object.assign(panel, updates);
+    if (panel) {
+      Object.assign(panel, updates);
+      storyboardState.dirty = true; // 标记为已修改
+    }
     updateSaveButton();
   }
 
   async function uploadFilesAndGetUrls(files) {
     const urls = [];
+    const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
     for (const file of files) {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("film_id", filmId);
       const resp = await fetch("/quick-upload", {
         method: "POST",
         body: formData,
@@ -511,8 +523,10 @@
     const now = new Date().toISOString(); // 标准格式，便于排序
     storyboardState.lastModified = now;
 
+    const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
     const data = {
       id: storyboardState.currentId,
+      film_id: filmId,
       title: storyboardState.title,
       panels: storyboardState.panels.map((p) => ({
         panel_id: p.panel_id,
@@ -533,6 +547,7 @@
       if (result.success) {
         storyboardState.currentId = result.record_id;
         storyboardState.title = data.title;
+        storyboardState.dirty = false; //
         loadStoryboardList();
         showToast("故事板保存成功！", "success", 5000);
         window.shouldHighlightNewRecords = true;
@@ -547,18 +562,25 @@
   }
 
   async function switchToStoryboard(id) {
-    if (storyboardState.panels.length > 0 && storyboardState.currentId) {
+    if (storyboardState.currentId && storyboardState.dirty) {
       const shouldSave = confirm("当前故事板有修改，是否先保存？");
       if (shouldSave) {
-        await saveStoryboard();
+        await saveStoryboard(); // 保存会自动清除 dirty
       }
     }
 
     if (id === "__new__") {
-      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
+      storyboardState = {
+        currentId: null,
+        title: "未命名故事板",
+        panels: [],
+        lastModified: null,
+        dirty: false,
+      };
     } else if (id) {
       try {
-        const resp = await fetch(`/load-storyboard/${id}`);
+        const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+        const resp = await fetch(`/load-storyboard/${id}?film_id=${filmId}`);
         const data = await resp.json();
         storyboardState = {
           currentId: data.id,
@@ -570,13 +592,26 @@
         return;
       }
     } else {
-      storyboardState = { currentId: null, title: "未命名故事板", panels: [] };
+      storyboardState = {
+        currentId: null,
+        title: "未命名故事板",
+        panels: [],
+        lastModified: null,
+        dirty: false,
+      };
     }
 
     renderPanels();
     applyUniformAspectRatio();
     updateSaveButton();
     loadStoryboardListIntoDropdown();
+
+    // 在 switchToStoryboard 函数末尾添加：
+    if (id && id !== "__new__") {
+      $("#deleteStoryboardBtn").show();
+    } else {
+      $("#deleteStoryboardBtn").hide();
+    }
   }
 
   // ======================
@@ -652,14 +687,21 @@
   }
 
   function resetStoryboard() {
-    if (storyboardState.panels.length > 0) {
+    if (storyboardState.panels.length > 0 && storyboardState.dirty) {
       if (!confirm("当前故事板有内容，确定要新建一个吗？未保存的内容将丢失。"))
         return;
     }
     storyboardState.panels = [];
+    storyboardState.title = "未命名故事板";
+    storyboardState.currentId = null;
+    storyboardState.dirty = false;
+    storyboardState.lastModified = null;
+    $("#storyboardTitleText").html(storyboardState.title);
+    $("#storyboardTitleInput").val(storyboardState.title);
     renderPanels();
     applyUniformAspectRatio();
     updateSaveButton();
+    $("#deleteStoryboardBtn").hide();
   }
 
   function startEditingTitle() {
@@ -672,6 +714,9 @@
 
   function finishEditingTitle() {
     const newTitle = $("#storyboardTitleInput").val().trim() || "未命名故事板";
+    if (newTitle !== storyboardState.title) {
+      storyboardState.dirty = true;
+    }
     $("#storyboardTitleText").text(newTitle);
     $("#storyboardTitleInput").addClass("d-none");
     $("#storyboardTitleText").show();
@@ -732,10 +777,80 @@
     }
   }
 
+  // 删除当前故事板
+  $("#deleteStoryboardBtn").click(async function () {
+    const currentId = storyboardState.currentId;
+    if (!currentId) {
+      showToast("无可删除的故事板", "error", 2000);
+      return;
+    }
+
+    const title = storyboardState.title || "当前故事板";
+    if (!confirm(`确定要删除故事板 “${title}” 吗？此操作不可恢复。`)) {
+      return;
+    }
+
+    try {
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+      const resp = await fetch(`/delete-storyboard/${currentId}?film_id=${filmId}`, {
+        method: "DELETE",
+      });
+      const result = await resp.json();
+      if (result.success) {
+        showToast("故事板已删除", "success", 2000);
+        // 清空当前状态，回到新建
+        storyboardState = {
+          currentId: null,
+          title: "未命名故事板",
+          panels: [],
+          lastModified: null,
+          dirty: false,
+        };
+        renderPanels();
+        updateSaveButton();
+        $("#deleteStoryboardBtn").hide();
+        loadStoryboardListIntoDropdown();
+        // 可选：自动加载最新故事板（或保持空白）
+        const listResp = await fetch(`/list-storyboards?film_id=${filmId}`);
+        const list = await listResp.json();
+        if (list.length > 0) {
+          switchToStoryboard(list[0].id);
+        } else {
+          resetStoryboard();
+        }
+      } else {
+        throw new Error(result.error || "删除失败");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("删除失败：" + err.message, "error", 3000);
+    }
+  });
+
+  window.addEventListener("beforeunload", (event) => {
+    if (storyboardState.currentId && storyboardState.dirty) {
+      // 触发浏览器默认提示
+      event.preventDefault();
+      event.returnValue = ""; // 必须设置（即使为空字符串）
+      return "";
+    }
+  });
+
   // ======================
   // 启动
   // ======================
 
   init();
-  loadStoryboardListIntoDropdown();
+  // 延迟加载故事板列表，等待 FilmManager 初始化完成
+  if (window.FilmManager && window.FilmManager.getCurrentFilmId()) {
+    loadStoryboardListIntoDropdown();
+  }
+  
+  // 暴露给外部调用
+  window.StoryboardModule = {
+    loadStoryboardList,
+    loadStoryboardListIntoDropdown,
+    resetStoryboard,
+    saveStoryboard
+  };
 })();

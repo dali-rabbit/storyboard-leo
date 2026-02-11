@@ -1167,26 +1167,40 @@ def region_edit():
         rh = region.get("height", 1)
         aspect_ratio = region.get("aspect_ratio", "1:1")
         
-        # 加载原始图片（支持 HTTP URL、Data URL 和本地路径）
-        try:
-            if original_url.startswith("data:image"):
-                # Data URL (base64)
-                header, encoded = original_url.split(",", 1)
+        # 辅助函数：加载图片（支持多种格式）
+        def load_image_for_region(url, name="image"):
+            """支持 data URL、HTTP URL、/history/ 路径、本地路径"""
+            if url.startswith("data:image"):
+                header, encoded = url.split(",", 1)
                 image_data = base64.b64decode(encoded)
-                original_image = Image.open(BytesIO(image_data)).convert("RGB")
-            elif original_url.startswith("http://") or original_url.startswith("https://"):
-                # HTTP URL
-                resp = requests.get(original_url, timeout=30)
+                return Image.open(BytesIO(image_data)).convert("RGB")
+            elif url.startswith("http://") or url.startswith("https://"):
+                resp = requests.get(url, timeout=30)
                 resp.raise_for_status()
-                original_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            elif os.path.exists(original_url):
-                # 本地文件路径
-                original_image = Image.open(original_url).convert("RGB")
+                return Image.open(BytesIO(resp.content)).convert("RGB")
+            elif url.startswith("/history/") or url.startswith("history/"):
+                # URL 格式: /history/films/xxx/history/results/yyy.jpg
+                # 实际路径: films/xxx/history/results/yyy.jpg (去掉 /history/ 前缀)
+                if url.startswith("/history/"):
+                    local_path = url[9:]  # 去掉 '/history/' 前缀 (9个字符)
+                else:
+                    local_path = url[8:]  # 去掉 'history/' 前缀 (8个字符)
+                abs_path = os.path.join(os.getcwd(), local_path)
+                print(f"[Load Image] Converted URL to path: {abs_path}")
+                if os.path.exists(abs_path):
+                    return Image.open(abs_path).convert("RGB")
+                raise FileNotFoundError(f"Local file not found: {abs_path}")
+            elif os.path.exists(url):
+                return Image.open(url).convert("RGB")
             else:
-                return jsonify({"error": f"Unsupported image source: {original_url[:50]}..."}), 400
+                raise ValueError(f"Unsupported {name} source: {url[:50]}...")
+        
+        # 加载原始图片
+        try:
+            original_image = load_image_for_region(original_url, "original")
         except Exception as e:
             print(f"[Region Edit] 加载原始图片失败: {e}")
-            return jsonify({"error": "Failed to load original image"}), 500
+            return jsonify({"error": f"Failed to load original image: {str(e)}"}), 500
         
         orig_w, orig_h = original_image.size
         
@@ -1347,8 +1361,9 @@ def color_match():
     颜色匹配API：将目标图片的色调匹配到参考图片的色调
     
     请求参数:
-    - target_url: 目标图片URL（需要调整色调的图片）
-    - ref_url: 参考图片URL（原图，提供色调参考）
+    - target_url: 目标图片URL（需要调整色调的图片，编辑结果）
+    - ref_url: 参考图片URL（原图）
+    - region: 可选，从原图中提取指定区域作为参考 {x, y, width, height} 归一化坐标0-1
     - method: 颜色匹配方法，可选 'mkl', 'hm', 'reinhard', 'mvgd', 'hm-mvgd-hm', 'hm-mkl-hm'，默认 'mkl'
     - strength: 匹配强度，0.0-1.0，默认 1.0
     - film_id: 影片ID
@@ -1360,6 +1375,7 @@ def color_match():
         data = request.get_json()
         target_url = (data.get("target_url") or "").strip()
         ref_url = (data.get("ref_url") or "").strip()
+        region = data.get("region")  # 可选的选区参数
         method = data.get("method", "mkl")
         strength = float(data.get("strength", 1.0))
         film_id = data.get("film_id", DEFAULT_FILM_ID)
@@ -1375,41 +1391,65 @@ def color_match():
         # 限制 strength 范围
         strength = max(0.0, min(1.0, strength))
         
+        # 辅助函数：解析各种 URL 格式为 PIL Image
+        def load_image_from_url(url, name="image"):
+            """支持 data URL、HTTP URL、/history/ 路径、本地路径"""
+            if url.startswith("data:image"):
+                header, encoded = url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                return Image.open(BytesIO(image_data)).convert("RGB")
+            elif url.startswith("http://") or url.startswith("https://"):
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                return Image.open(BytesIO(resp.content)).convert("RGB")
+            elif url.startswith("/history/") or url.startswith("history/"):
+                if url.startswith("/history/"):
+                    local_path = url[9:]
+                else:
+                    local_path = url[8:]
+                abs_path = os.path.join(os.getcwd(), local_path)
+                if os.path.exists(abs_path):
+                    return Image.open(abs_path).convert("RGB")
+                raise FileNotFoundError(f"Local file not found: {abs_path}")
+            elif os.path.exists(url):
+                return Image.open(url).convert("RGB")
+            else:
+                raise ValueError(f"Unsupported {name} source: {url[:50]}...")
+        
         # 加载目标图片
         try:
-            if target_url.startswith("data:image"):
-                header, encoded = target_url.split(",", 1)
-                image_data = base64.b64decode(encoded)
-                target_image = Image.open(BytesIO(image_data)).convert("RGB")
-            elif target_url.startswith("http://") or target_url.startswith("https://"):
-                resp = requests.get(target_url, timeout=30)
-                resp.raise_for_status()
-                target_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            elif os.path.exists(target_url):
-                target_image = Image.open(target_url).convert("RGB")
-            else:
-                return jsonify({"error": f"Unsupported target image source"}), 400
+            target_image = load_image_from_url(target_url, "target")
+            print(f"[Color Match] 目标图片加载成功: {target_image.size}")
         except Exception as e:
             print(f"[Color Match] 加载目标图片失败: {e}")
-            return jsonify({"error": "Failed to load target image"}), 500
+            return jsonify({"error": f"Failed to load target image: {str(e)}"}), 500
         
         # 加载参考图片
         try:
-            if ref_url.startswith("data:image"):
-                header, encoded = ref_url.split(",", 1)
-                image_data = base64.b64decode(encoded)
-                ref_image = Image.open(BytesIO(image_data)).convert("RGB")
-            elif ref_url.startswith("http://") or ref_url.startswith("https://"):
-                resp = requests.get(ref_url, timeout=30)
-                resp.raise_for_status()
-                ref_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            elif os.path.exists(ref_url):
-                ref_image = Image.open(ref_url).convert("RGB")
-            else:
-                return jsonify({"error": f"Unsupported ref image source"}), 400
+            ref_image = load_image_from_url(ref_url, "reference")
+            print(f"[Color Match] 参考图片加载成功: {ref_image.size}")
         except Exception as e:
             print(f"[Color Match] 加载参考图片失败: {e}")
-            return jsonify({"error": "Failed to load reference image"}), 500
+            return jsonify({"error": f"Failed to load reference image: {str(e)}"}), 500
+        
+        # 如果提供了选区参数，从原图中提取对应区域作为参考
+        if region and all(k in region for k in ['x', 'y', 'width', 'height']):
+            ref_w, ref_h = ref_image.size
+            # 计算像素坐标
+            crop_x = int(region['x'] * ref_w)
+            crop_y = int(region['y'] * ref_h)
+            crop_w = int(region['width'] * ref_w)
+            crop_h = int(region['height'] * ref_h)
+            
+            # 确保边界有效
+            crop_x = max(0, min(crop_x, ref_w - 1))
+            crop_y = max(0, min(crop_y, ref_h - 1))
+            crop_w = min(crop_w, ref_w - crop_x)
+            crop_h = min(crop_h, ref_h - crop_y)
+            
+            # 裁剪出选区作为参考
+            ref_image = ref_image.crop((crop_x, crop_y, crop_x + crop_w, crop_y + crop_h))
+            print(f"[Color Match] 从原图提取选区作为参考: ({crop_x}, {crop_y}, {crop_w}, {crop_h})")
         
         # 调整参考图片尺寸以匹配目标图片
         if ref_image.size != target_image.size:
@@ -1517,41 +1557,44 @@ def seamless_clone():
                 "method": "none"
             })
         
+        # 辅助函数：解析各种 URL 格式为 PIL Image
+        def load_image_for_seamless(url, name="image"):
+            """支持 data URL、HTTP URL、/history/ 路径、本地路径"""
+            if url.startswith("data:image"):
+                header, encoded = url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                return Image.open(BytesIO(image_data)).convert("RGB")
+            elif url.startswith("http://") or url.startswith("https://"):
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                return Image.open(BytesIO(resp.content)).convert("RGB")
+            elif url.startswith("/history/") or url.startswith("history/"):
+                if url.startswith("/history/"):
+                    local_path = url[9:]
+                else:
+                    local_path = url[8:]
+                abs_path = os.path.join(os.getcwd(), local_path)
+                if os.path.exists(abs_path):
+                    return Image.open(abs_path).convert("RGB")
+                raise FileNotFoundError(f"Local file not found: {abs_path}")
+            elif os.path.exists(url):
+                return Image.open(url).convert("RGB")
+            else:
+                raise ValueError(f"Unsupported {name} source: {url[:50]}...")
+        
         # 加载选区小图
         try:
-            if source_url.startswith("data:image"):
-                header, encoded = source_url.split(",", 1)
-                image_data = base64.b64decode(encoded)
-                source_image = Image.open(BytesIO(image_data)).convert("RGB")
-            elif source_url.startswith("http://") or source_url.startswith("https://"):
-                resp = requests.get(source_url, timeout=30)
-                resp.raise_for_status()
-                source_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            elif os.path.exists(source_url):
-                source_image = Image.open(source_url).convert("RGB")
-            else:
-                return jsonify({"error": f"Unsupported source image"}), 400
+            source_image = load_image_for_seamless(source_url, "source")
         except Exception as e:
             print(f"[Seamless Clone] 加载选区图失败: {e}")
-            return jsonify({"error": "Failed to load source image"}), 500
+            return jsonify({"error": f"Failed to load source image: {str(e)}"}), 500
         
         # 加载原图
         try:
-            if target_url.startswith("data:image"):
-                header, encoded = target_url.split(",", 1)
-                image_data = base64.b64decode(encoded)
-                target_image = Image.open(BytesIO(image_data)).convert("RGB")
-            elif target_url.startswith("http://") or target_url.startswith("https://"):
-                resp = requests.get(target_url, timeout=30)
-                resp.raise_for_status()
-                target_image = Image.open(BytesIO(resp.content)).convert("RGB")
-            elif os.path.exists(target_url):
-                target_image = Image.open(target_url).convert("RGB")
-            else:
-                return jsonify({"error": f"Unsupported target image"}), 400
+            target_image = load_image_for_seamless(target_url, "target")
         except Exception as e:
             print(f"[Seamless Clone] 加载原图失败: {e}")
-            return jsonify({"error": "Failed to load target image"}), 500
+            return jsonify({"error": f"Failed to load target image: {str(e)}"}), 500
         
         # 转换为 OpenCV 格式 (BGR)
         source_cv = cv2.cvtColor(np.array(source_image), cv2.COLOR_RGB2BGR)

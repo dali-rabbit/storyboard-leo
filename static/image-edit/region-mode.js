@@ -400,6 +400,18 @@
     });
   }
 
+  // 检查是否有未应用的编辑结果
+  function hasUnappliedResults() {
+    return regionEditResults.length > 0;
+  }
+
+  // 提示用户确认放弃当前编辑结果
+  function confirmAbandonResults(actionName) {
+    const count = regionEditResults.length;
+    const message = `当前选区有 ${count} 个编辑结果未应用。\n\n${actionName}将丢失这些结果。\n\n是否继续？`;
+    return confirm(message);
+  }
+
   // 图生图额外图片上传
   document.getElementById("regionImg2ImgDropZone")?.addEventListener("click", () => {
     document.getElementById("regionImg2ImgExtraUpload")?.click();
@@ -450,6 +462,15 @@
     const mode = e.target.value;
     
     if (mode === "region") {
+      // 切换到区域编辑模式：检查是否有未应用的编辑结果
+      if (hasUnappliedResults()) {
+        if (!confirmAbandonResults("切换到区域编辑模式")) {
+          // 用户取消，恢复原来的选择
+          e.target.value = "crop";
+          return;
+        }
+      }
+      
       // 区域编辑模式
       cropState.enabled = false;
       document.querySelectorAll(".crop-mode-option").forEach(el => el.classList.add("d-none"));
@@ -461,6 +482,15 @@
       currentOriginalImage = img.src;
       regionEditState.enabled = true;
     } else {
+      // 切换到裁剪模式：检查是否有未应用的编辑结果
+      if (hasUnappliedResults()) {
+        if (!confirmAbandonResults("切换到裁剪模式")) {
+          // 用户取消，恢复原来的选择
+          e.target.value = "region";
+          return;
+        }
+      }
+      
       // 裁剪模式
       regionEditState.enabled = false;
       cropState.enabled = true;
@@ -549,6 +579,13 @@
       render();
     } else {
       // 第三步：重新选取（回到初始状态）
+      // 检查是否有未应用的编辑结果
+      if (hasUnappliedResults()) {
+        if (!confirmAbandonResults("重新选取区域")) {
+          return; // 用户取消，不执行重新选取
+        }
+      }
+      
       regionEditStep = 0;
       regionEditState.regionSelected = false;
       regionEditState.regionConfirmed = false;
@@ -816,6 +853,12 @@
         console.log("[Color Match] 调用颜色匹配API");
         console.log("[Color Match] target:", result.url);
         console.log("[Color Match] ref:", originalUrl);
+        console.log("[Color Match] 参考选区:", {
+          x: regionEditState.x,
+          y: regionEditState.y,
+          width: regionEditState.width,
+          height: regionEditState.height,
+        });
         
         const resp = await fetch("/color-match", {
           method: "POST",
@@ -823,6 +866,12 @@
           body: JSON.stringify({
             target_url: result.url,
             ref_url: originalUrl,
+            region: {
+              x: regionEditState.x,
+              y: regionEditState.y,
+              width: regionEditState.width,
+              height: regionEditState.height,
+            },
             method: colorMethod,
             strength: 1.0,
             film_id: filmId,

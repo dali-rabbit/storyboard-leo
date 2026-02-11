@@ -23,6 +23,13 @@ LOCAL_REPO_PATH = os.getenv("LOCAL_REPO_PATH", "")  # 本地 Git 仓库路径（
 # ImgBB 配置
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
+# 火山 TOS 配置（当 backend=volc_tos 时使用）
+VOLC_TOS_ACCESS_KEY = os.getenv("VOLC_TOS_ACCESS_KEY")
+VOLC_TOS_SECRET_KEY = os.getenv("VOLC_TOS_SECRET_KEY")
+VOLC_TOS_ENDPOINT = os.getenv("VOLC_TOS_ENDPOINT", "tos-cn-beijing.volces.com")
+VOLC_TOS_REGION = os.getenv("VOLC_TOS_REGION", "cn-beijing")
+VOLC_TOS_BUCKET = os.getenv("VOLC_TOS_BUCKET")
+
 
 class UploadError(Exception):
     pass
@@ -170,3 +177,125 @@ def _upload_to_github_jsdelivr(file_path: str, original_filename: str = "") -> s
     url = f"https://cdn.jsdelivr.net/gh/{GITHUB_USERNAME}/{GITHUB_REPO}@{GITHUB_BRANCH}/{jsdelivr_path}"
     print(f"[GitHub] 生成的 URL: {url}")
     return url
+
+
+# ========== 火山 TOS 上传（用于国内插件如 seedream） ==========
+
+# 插件上传后端映射：指定插件使用哪个上传后端
+PLUGIN_UPLOAD_BACKENDS = {
+    "seedream": "volc_tos",  # seedream 使用火山 TOS
+    # 其他插件默认使用系统配置的后端（imgbb/github）
+}
+
+
+def upload_file_for_plugin(file_path: str, plugin_name: str, filename: str = None) -> str:
+    """
+    根据插件名选择合适的上传后端
+    :param file_path: 本地文件路径
+    :param plugin_name: 插件名称（如 "seedream"）
+    :param filename: 可选，用于生成文件名
+    :return: 外网可访问的 URL
+    """
+    # 确定使用哪个后端
+    backend = PLUGIN_UPLOAD_BACKENDS.get(plugin_name, UPLOAD_BACKEND)
+    print(f"[Uploader] 插件 '{plugin_name}' 使用后端: {backend}")
+    
+    if backend == "volc_tos":
+        return _upload_to_volc_tos(file_path, filename)
+    elif backend == "github_jsdelivr":
+        return _upload_to_github_jsdelivr(file_path, filename)
+    else:
+        return _upload_to_imgbb(file_path)
+
+
+def _upload_to_volc_tos(file_path: str, filename: str = None) -> str:
+    """
+    上传到火山引擎对象存储 TOS，返回临时访问 URL
+    文档: https://www.volcengine.com/docs/6349/92800
+    预签名URL: https://www.volcengine.com/docs/6349/135725
+    """
+    if not all([VOLC_TOS_ACCESS_KEY, VOLC_TOS_SECRET_KEY, VOLC_TOS_BUCKET]):
+        raise UploadError("VOLC_TOS 配置不完整，请检查环境变量")
+    
+    try:
+        # 导入火山 SDK
+        import tos
+    except ImportError:
+        raise UploadError("未安装 tos，请运行: pip install tos")
+    
+    # 生成唯一文件名
+    ext = Path(file_path).suffix or ".jpg"
+    if filename:
+        unique_name = f"{uuid.uuid4().hex}_{filename}{ext}"
+    else:
+        unique_name = f"{uuid.uuid4().hex}{ext}"
+    object_key = f"storyboard/{unique_name}"
+    
+    print(f"[VolcTOS] 开始上传: {object_key}")
+    print(f"[VolcTOS] Bucket: {VOLC_TOS_BUCKET}")
+    print(f"[VolcTOS] Endpoint: {VOLC_TOS_ENDPOINT}")
+    
+    try:
+        # 初始化 TOS 客户端
+        client = tos.TosClientV2(
+            VOLC_TOS_ACCESS_KEY,
+            VOLC_TOS_SECRET_KEY,
+            VOLC_TOS_ENDPOINT,
+            VOLC_TOS_REGION
+        )
+        
+        # 上传文件
+        with open(file_path, "rb") as f:
+            client.put_object(
+                bucket=VOLC_TOS_BUCKET,
+                key=object_key,
+                content=f
+            )
+        
+        print(f"[VolcTOS] 上传成功")
+        
+        # 生成预签名 URL（临时访问链接）
+        # 文档: https://www.volcengine.com/docs/6349/135725
+        expires = 3600 * 24  # 24小时有效
+        
+        try:
+            # SDK 需要 HttpMethodType 枚不（值为 Http_Method_Get 而非 GET）
+            from tos.enum import HttpMethodType
+            pre_signed_result = client.pre_signed_url(
+                http_method=HttpMethodType.Http_Method_Get,
+                bucket=VOLC_TOS_BUCKET,
+                key=object_key,
+                expires=expires
+            )
+            print(f"[VolcTOS] pre_signed_result 类型: {type(pre_signed_result)}")
+            print(f"[VolcTOS] pre_signed_result 值: {pre_signed_result}")
+        except Exception as e:
+            print(f"[VolcTOS] pre_signed_url 调用失败: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        
+        # 处理不同版本 SDK 的返回格式
+        try:
+            if isinstance(pre_signed_result, tuple):
+                signed_url = pre_signed_result[0]  # 可能是 (url, headers) 元组
+            elif isinstance(pre_signed_result, str):
+                signed_url = pre_signed_result  # 直接是字符串
+            elif hasattr(pre_signed_result, 'signed_url'):
+                signed_url = pre_signed_result.signed_url
+            elif hasattr(pre_signed_result, 'url'):
+                signed_url = pre_signed_result.url
+            else:
+                signed_url = str(pre_signed_result)
+        except Exception as e:
+            print(f"[VolcTOS] 解析返回结果失败: {e}")
+            print(f"[VolcTOS] 原始返回值: {pre_signed_result}")
+            raise
+        
+        print(f"[VolcTOS] 预签名 URL 生成成功，有效期 {expires}秒")
+        print(f"[VolcTOS] URL: {signed_url[:100]}...")
+        return signed_url
+        
+    except Exception as e:
+        print(f"[VolcTOS] 上传失败: {e}")
+        raise UploadError(f"火山 TOS 上传失败: {e}")

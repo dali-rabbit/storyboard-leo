@@ -2,3 +2,5 @@ Flask>=3.0.0
 requests>=2.31.0
 Pillow>=10.0.0
 python-dotenv
+tos>=2.8.0
+volcenginesdkarkruntime>=3.0.0

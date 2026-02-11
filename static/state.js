@@ -1,24 +1,25 @@
 // state.js
 
 // 全局提示函数
-function showToast(message, type = "info", delay = 0) {
+// delay: 自动关闭延迟（毫秒），默认 3000ms，0 表示不自动关闭
+function showToast(message, type = "info", delay = 3000) {
   // type: 'success', 'error', 'warning', 'info'
   const colors = {
-    success: "green",
-    error: "red",
-    warning: "orange",
-    info: "blue",
+    success: "#28a745",
+    error: "#dc3545",
+    warning: "#fd7e14",
+    info: "#17a2b8",
   };
   const bgColor = colors[type] || "blue";
 
   const toastId = "toast-" + Date.now();
   const toastHtml = `
-    <div id="${toastId}" class="toast align-items-center text-white border-0 mb-2" role="alert" style="background-color: ${bgColor}; min-width: 250px; pointer-events: auto;">
+    <div id="${toastId}" class="toast align-items-center text-white border-0 mb-2" role="alert" style="background-color: ${bgColor}; min-width: 250px; max-width: 400px; pointer-events: auto;">
       <div class="d-flex">
-        <div class="toast-body">
+        <div class="toast-body" style="word-break: break-word; overflow-wrap: break-word; max-width: 330px;">
           ${message}
         </div>
-        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto flex-shrink-0" data-bs-dismiss="toast" aria-label="Close" style="min-width: 16px;"></button>
       </div>
     </div>
   `;

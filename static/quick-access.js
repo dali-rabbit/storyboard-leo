@@ -8,16 +8,19 @@ window.QuickAccess = (function () {
 
   // 加载数据（从服务器）
   async function load(filmId) {
+    console.log("[QuickAccess] 加载影片: " + filmId);
     currentFilmId = filmId;
+    currentFilter = "all"; // 切换影片时重置筛选
     if (!filmId) {
       images = [];
       return;
     }
     
     try {
-      const res = await fetch(`/api/films/${filmId}/quick-access`);
+      const res = await fetch("/api/films/" + filmId + "/quick-access");
       if (!res.ok) throw new Error("加载失败");
       images = await res.json();
+      console.log("[QuickAccess] 加载成功: " + images.length + " 张图片");
       
       // 数据迁移（老格式兼容）
       images.forEach((img) => {
@@ -74,10 +77,11 @@ window.QuickAccess = (function () {
 
     if (usableLocal && !usableRemote) {
       try {
+        const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
         const uploadRes = await fetch("/quick-upload-2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ local_path: usableLocal }),
+          body: JSON.stringify({ local_path: usableLocal, film_id: filmId }),
         });
         if (uploadRes.ok) {
           const data = await uploadRes.json();
@@ -138,14 +142,23 @@ window.QuickAccess = (function () {
 
   async function removeImage(index) {
     const img = images[index];
-    if (!img || !currentFilmId) return;
+    if (!img || !currentFilmId) {
+      console.log(`[QuickAccess] 删除失败: 无效索引或影片ID`);
+      return;
+    }
     
+    console.log(`[QuickAccess] 删除图片: ${img.localPath}`);
     images.splice(index, 1);
     
     try {
-      await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(img.localPath)}`, {
+      const res = await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(img.localPath)}`, {
         method: "DELETE"
       });
+      if (!res.ok) {
+        console.error("[QuickAccess] 删除失败:", await res.text());
+      } else {
+        console.log("[QuickAccess] 删除成功");
+      }
     } catch (e) {
       console.error("[QuickAccess] 删除失败:", e);
     }
@@ -198,6 +211,7 @@ window.QuickAccess = (function () {
             <div id="qaDynamicFields"></div>
           </div>
           <div class="modal-footer">
+            ${isEditing ? '<button type="button" class="btn btn-outline-danger me-auto" id="qaDeleteBtn">删除</button>' : ''}
             <button type="button" class="btn btn-primary" id="qaSaveBtn">${isEditing ? "保存" : "添加"}</button>
           </div>
         </div>
@@ -317,25 +331,21 @@ window.QuickAccess = (function () {
     // 保存逻辑
     $("#qaSaveBtn").on("click", async () => {
       const cat = $('input[name="qaCategory"]:checked').val();
-      let newImage = null;
+      
+      // 收集表单数据
+      let updates = {};
+      
       if (cat === "none") {
         const title = $("#qaTitle").val().trim();
         if (!title) {
-          showToast("标题不能为空", "warning");
+          showToast("标题不能为空", "warning", 3000);
           return;
         }
-        newImage = {
+        updates = {
           category: null,
-          group: title, // 老 title 兼容字段
+          group: title,
           viewType: null,
           note: null,
-          ...(imgData
-            ? {
-                localPath: imgData.localPath,
-                remoteUrl: imgData.remoteUrl,
-                addedAt: imgData.addedAt,
-              }
-            : {}),
         };
       } else {
         let group;
@@ -346,33 +356,29 @@ window.QuickAccess = (function () {
           group = selectVal;
         }
         if (!group) {
-          showToast(`${cat}名字不能为空`, "warning");
+          showToast(`${cat}名字不能为空`, "warning", 3000);
           return;
         }
-        newImage = {
+        updates = {
           category: cat,
           group: group,
           viewType: $("#qaViewType").val() || null,
           note: $("#qaNote").val().trim() || null,
-          ...(imgData
-            ? {
-                localPath: imgData.localPath,
-                remoteUrl: imgData.remoteUrl,
-                addedAt: imgData.addedAt,
-              }
-            : {}),
         };
       }
 
       if (!isEditing) {
-        // 新增：需传入图片路径
+        // 新增模式（从历史记录拖拽添加）
         if (!window.__currentQuickAddImage) {
-          showToast("图片信息缺失", "error");
+          showToast("图片信息缺失", "error", 0);
           return;
         }
-        newImage.localPath = window.__currentQuickAddImage.localPath;
-        newImage.remoteUrl = window.__currentQuickAddImage.remoteUrl;
-        newImage.addedAt = new Date().toISOString();
+        const newImage = {
+          ...updates,
+          localPath: window.__currentQuickAddImage.localPath,
+          remoteUrl: window.__currentQuickAddImage.remoteUrl,
+          addedAt: new Date().toISOString(),
+        };
         images.push(newImage);
         
         // 保存到服务器
@@ -388,22 +394,25 @@ window.QuickAccess = (function () {
           }
         }
       } else {
-        // 编辑：替换原数据
-        const idx = images.findIndex(
-          (i) =>
-            i.localPath === imgData.localPath &&
-            i.remoteUrl === imgData.remoteUrl,
-        );
-        if (idx !== -1) {
-          images[idx] = newImage;
+        // 编辑模式：直接修改原对象
+        if (imgData) {
+          // 直接修改传入的对象（影响数组中的引用）
+          Object.assign(imgData, updates);
+          imgData.updatedAt = new Date().toISOString();
+          
           // 更新服务器
           if (currentFilmId) {
             try {
-              await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(newImage.localPath)}`, {
+              const res = await fetch(`/api/films/${currentFilmId}/quick-access/${encodeURIComponent(imgData.localPath)}`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(newImage)
+                body: JSON.stringify(imgData)
               });
+              if (!res.ok) {
+                console.error("[QuickAccess] 服务器更新失败:", await res.text());
+              } else {
+                console.log("[QuickAccess] 更新成功");
+              }
             } catch (e) {
               console.error("[QuickAccess] 更新失败:", e);
             }
@@ -491,7 +500,7 @@ window.QuickAccess = (function () {
     $container.empty();
     $renderTarget = $container;
 
-    // —————— 2. 渲染过滤器 ——————
+    // —————— 2. 渲染过滤器和上传按钮 ——————
 
     let $filter = $renderTarget.find(".quick-filter");
     if ($filter.length === 0) {
@@ -500,21 +509,84 @@ window.QuickAccess = (function () {
             <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="all">全部</button>
             <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="角色">角色</button>
             <button type="button" class="btn btn-sm btn-outline-secondary filter-btn" data-filter="场景">场景</button>
+            <div class="ms-auto">
+              <input type="file" id="quickAccessUpload" multiple accept="image/*" class="d-none">
+              <button type="button" class="btn btn-sm btn-primary" id="quickAccessUploadBtn" title="上传图片">
+                +
+              </button>
+            </div>
           </div>
         `);
       $renderTarget.append($filter);
       $filter.on("click", ".filter-btn", function () {
         const filter = $(this).data("filter");
         setFilter(filter);
-        // $filter.find(".filter-btn").removeClass("active");
-        // $(this).addClass("active");
       });
       $filter
         .find(`.filter-btn[data-filter="${currentFilter}"]`)
         .addClass("active");
+      
+      // 绑定上传按钮
+      $filter.on("click", "#quickAccessUploadBtn", function () {
+        $("#quickAccessUpload").trigger("click");
+      });
+      
+      // 绑定文件选择
+      $filter.on("change", "#quickAccessUpload", async function (e) {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+        
+        showToast(`正在上传 ${files.length} 张图片...`, "info", 2000);
+        
+        for (const file of files) {
+          await uploadToQuickAccess(file);
+        }
+        
+        // 清空 input 以便再次选择同一文件
+        $(this).val("");
+      });
+      
+      // 绑定拖拽上传到整个容器
+      const $uploadArea = $renderTarget;
+      $uploadArea
+        .off("dragover")
+        .on("dragover", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          $(this).addClass("drag-over");
+        })
+        .off("dragleave")
+        .on("dragleave", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          $(this).removeClass("drag-over");
+        })
+        .off("drop")
+        .on("drop", async function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          $(this).removeClass("drag-over");
+          
+          // 检查是否是从快捷访问本身拖出来的（不处理）
+          if (window.__dragOrigin === "quick") {
+            return;
+          }
+          
+          const files = Array.from(e.originalEvent.dataTransfer.files);
+          const imageFiles = files.filter(f => f.type.startsWith("image/"));
+          
+          if (imageFiles.length === 0) return;
+          
+          showToast(`正在上传 ${imageFiles.length} 张图片...`, "info", 2000);
+          
+          for (const file of imageFiles) {
+            await uploadToQuickAccess(file);
+          }
+        });
     }
 
     // —————— 3. 构建图像 HTML ——————
+    console.log(`[QuickAccess] 渲染: ${images.length} 张图片, 筛选: ${currentFilter}`);
     // 过滤图片
     const filteredImages =
       currentFilter === "all"
@@ -729,10 +801,73 @@ window.QuickAccess = (function () {
     }
   }
 
+  // 上传文件到快捷访问
+  async function uploadToQuickAccess(file) {
+    if (!currentFilmId) {
+      showToast("请先选择影片", "warning", 3000);
+      return;
+    }
+    
+    const filmId = currentFilmId;
+    
+    try {
+      // 1. 上传文件到服务器
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("film_id", filmId);
+      
+      const uploadRes = await fetch("/quick-upload", {
+        method: "POST",
+        body: formData,
+      });
+      
+      if (!uploadRes.ok) {
+        throw new Error("上传失败");
+      }
+      
+      const uploadData = await uploadRes.json();
+      const localPath = uploadData.local_path;
+      const remoteUrl = uploadData.url;
+      
+      // 2. 创建新图片对象
+      const newImage = {
+        localPath: localPath,
+        remoteUrl: remoteUrl,
+        category: null,
+        group: "",
+        viewType: null,
+        note: null,
+        addedAt: new Date().toISOString(),
+      };
+      
+      // 3. 添加到本地数组
+      images.push(newImage);
+      
+      // 4. 保存到服务器（初始状态）
+      await fetch(`/api/films/${filmId}/quick-access`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newImage),
+      });
+      
+      // 5. 弹出编辑框（传入对象引用，直接修改）
+      // 使用编辑模式，让用户设置分类信息
+      showAddQuickAccessModal(newImage);
+      
+      renderSidebar();
+      showToast(`上传成功: ${file.name}`, "success", 2000);
+      
+    } catch (e) {
+      console.error("[QuickAccess] 上传失败:", e);
+      showToast(`上传失败: ${file.name}`, "error", 0);
+    }
+  }
+
   return {
     load,
     addImage,
     renderSidebar,
     getImages: () => [...images],
+    uploadToQuickAccess,
   };
 })();

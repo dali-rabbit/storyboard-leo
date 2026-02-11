@@ -475,7 +475,7 @@
                                         id="generatedPreview"
                                     >
                                         <p class="text-muted">
-                                            点击"生成图片"后，预览将显示在此处。
+                                            点击“生成图片”后，预览将显示在此处。
                                         </p>
                                     </div>
                                 </div>
@@ -490,65 +490,34 @@
                         role="tabpanel"
                         aria-labelledby="image-split-tab"
                     >
-                        <!-- 在"图片编辑" Tab 的工具栏中 -->
+                        <!-- 在“图片编辑” Tab 的工具栏中 -->
                         <div
                             class="d-flex justify-content-between align-items-center mb-3"
                         >
                             <h5 class="mb-0">图片编辑</h5>
                             <div class="d-flex gap-2">
-                                <!-- 编辑模式选择 -->
-                                <select
-                                    id="editMode"
-                                    class="form-select form-select-sm"
-                                    style="width: auto"
-                                >
-                                    <option value="crop">裁剪模式</option>
-                                    <option value="region">区域编辑</option>
-                                </select>
-                                <!-- 裁剪模式子选项 -->
+                                <!-- 新增：裁剪模式选择 -->
                                 <select
                                     id="cropMode"
-                                    class="form-select form-select-sm crop-mode-option"
+                                    class="form-select form-select-sm"
                                     style="width: auto"
                                 >
                                     <option value="quadrants">四格裁剪</option>
                                     <option value="free">自由裁剪</option>
                                 </select>
-                                <!-- 区域编辑子选项 -->
-                                <select
-                                    id="regionAspectRatio"
-                                    class="form-select form-select-sm region-mode-option d-none"
-                                    style="width: auto"
-                                >
-                                    <option value="1:1">1:1</option>
-                                    <option value="16:9" selected>16:9</option>
-                                    <option value="9:16">9:16</option>
-                                    <option value="4:3">4:3</option>
-                                    <option value="3:4">3:4</option>
-                                    <option value="3:2">3:2</option>
-                                    <option value="2:3">2:3</option>
-                                    <option value="21:9">21:9</option>
-                                </select>
                                 <button
                                     id="cropToQuadrantsBtn"
-                                    class="btn btn-success btn-sm me-2 crop-mode-option"
+                                    class="btn btn-success btn-sm me-2"
                                     disabled
                                 >
                                     裁剪
                                 </button>
                                 <button
-                                    id="startRegionEditBtn"
-                                    class="btn btn-warning btn-sm me-2 region-mode-option d-none"
+                                    id="swapFaceBtn"
+                                    class="btn btn-outline-primary btn-sm me-2"
                                     disabled
                                 >
-                                    选取区域
-                                </button>
-                                <button
-                                    id="regionEditActionBtn"
-                                    class="btn btn-info btn-sm me-2 d-none"
-                                    disabled
-                                >
-                                    编辑区域
+                                    换脸
                                 </button>
                                 <button
                                     id="saveCroppedImagesBtn"
@@ -588,19 +557,6 @@
                                 style="display: none"
                                 crossorigin="anonymous"
                             />
-                        </div>
-
-                        <!-- 编辑结果面板 -->
-                        <div id="regionEditResultsPanel" class="mt-3" style="display: none;">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <h6 class="mb-0 text-light">编辑结果</h6>
-                                <button id="applyRegionEditBtn" class="btn btn-sm btn-success" disabled>
-                                    应用当前结果
-                                </button>
-                            </div>
-                            <div id="regionEditResultsList" class="d-flex flex-wrap gap-2">
-                                <!-- 编辑结果缩略图将显示在这里 -->
-                            </div>
                         </div>
                     </div>
 
@@ -805,107 +761,6 @@
                     </div>
                     <div class="modal-body"></div>
                     <div class="modal-footer"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 区域编辑模态框 -->
-        <div id="regionEditModal" class="modal fade" tabindex="-1">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content bg-dark text-light">
-                    <div class="modal-header">
-                        <h5 class="modal-title">区域编辑</h5>
-                        <button
-                            type="button"
-                            class="btn-close"
-                            data-bs-dismiss="modal"
-                        ></button>
-                    </div>
-                    <div class="modal-body">
-                        <!-- 编辑类型选择 -->
-                        <div class="mb-3">
-                            <label class="form-label">编辑类型</label>
-                            <div class="d-flex gap-3">
-                                <div class="form-check">
-                                    <input
-                                        class="form-check-input"
-                                        type="radio"
-                                        name="regionEditType"
-                                        id="regionEditTypeFace"
-                                        value="face_swap"
-                                        checked
-                                    />
-                                    <label
-                                        class="form-check-label"
-                                        for="regionEditTypeFace"
-                                        >换脸</label
-                                    >
-                                </div>
-                                <div class="form-check">
-                                    <input
-                                        class="form-check-input"
-                                        type="radio"
-                                        name="regionEditType"
-                                        id="regionEditTypeImg2Img"
-                                        value="img2img"
-                                    />
-                                    <label
-                                        class="form-check-label"
-                                        for="regionEditTypeImg2Img"
-                                        >图生图</label
-                                    >
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 换脸选项 -->
-                        <div id="regionFaceSwapSection">
-                            <label class="form-label">选择参考面部</label>
-                            <div id="regionFaceSwapOptions" class="row">
-                                <!-- 动态填充 -->
-                            </div>
-                        </div>
-
-                        <!-- 图生图选项 -->
-                        <div id="regionImg2ImgSection" style="display: none;">
-                            <div class="mb-3">
-                                <label class="form-label">提示词</label>
-                                <textarea
-                                    id="regionImg2ImgPrompt"
-                                    class="form-control"
-                                    rows="3"
-                                    placeholder="请输入提示词..."
-                                ></textarea>
-                            </div>
-                            <!-- 新增参考图片区域 -->
-                            <div class="mb-3">
-                                <label class="form-label">新增参考图（可选）</label>
-                                <input
-                                    type="file"
-                                    id="regionImg2ImgExtraUpload"
-                                    multiple
-                                    accept="image/*"
-                                    class="d-none"
-                                />
-                                <div
-                                    id="regionImg2ImgDropZone"
-                                    class="dashed-upload text-center py-2 mb-2"
-                                    style="cursor: pointer; border-style: dashed; border-width: 2px; border-radius: 4px;"
-                                >
-                                    <div class="text-muted small">
-                                        + 点击添加参考图
-                                    </div>
-                                </div>
-                                <div id="regionImg2ImgExtraList" class="d-flex flex-wrap gap-2">
-                                    <!-- 动态填充 -->
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary" id="confirmRegionEdit">确认编辑</button>
-                    </div>
                 </div>
             </div>
         </div>

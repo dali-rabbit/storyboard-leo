@@ -588,7 +588,7 @@
           panels: data.panels || [],
         };
       } catch (err) {
-        showToast("加载失败", "error");
+        showToast("加载失败", "error", 0);
         return;
       }
     } else {

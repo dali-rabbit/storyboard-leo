@@ -55,7 +55,7 @@ window.FilmManager = (function () {
     
     const film = films.find(f => f.id === filmId);
     if (!film) {
-      showToast("影片不存在", "error");
+      showToast("影片不存在", "error", 0);
       return;
     }
     
@@ -64,10 +64,12 @@ window.FilmManager = (function () {
     
     renderFilmSelector();
     
-    // 触发回调
-    onFilmChangeCallbacks.forEach(cb => cb(film));
+    // 触发回调（等待异步操作完成）
+    for (const cb of onFilmChangeCallbacks) {
+      await cb(film);
+    }
     
-    showToast(`已切换到影片: ${film.name}`, "success");
+    showToast(`已切换到影片: ${film.name}`, "success", 2000);
     return film;
   }
 
@@ -91,10 +93,10 @@ window.FilmManager = (function () {
       // 自动切换到新影片
       await switchFilm(film.id);
       
-      showToast("影片创建成功", "success");
+      showToast("影片创建成功", "success", 2000);
       return film;
     } catch (e) {
-      showToast(e.message, "error");
+      showToast(e.message, "error", 0);
       throw e;
     }
   }
@@ -102,7 +104,7 @@ window.FilmManager = (function () {
   // 删除影片
   async function deleteFilm(filmId) {
     if (filmId === "default") {
-      showToast("不能删除默认影片", "warning");
+      showToast("不能删除默认影片", "warning", 4000);
       return false;
     }
     
@@ -124,10 +126,10 @@ window.FilmManager = (function () {
       }
       
       renderFilmSelector();
-      showToast("影片删除成功", "success");
+      showToast("影片删除成功", "success", 2000);
       return true;
     } catch (e) {
-      showToast(e.message, "error");
+      showToast(e.message, "error", 0);
       throw e;
     }
   }
@@ -234,7 +236,7 @@ window.FilmManager = (function () {
       const desc = $("#newFilmDesc").val().trim();
       
       if (!name) {
-        showToast("请输入影片名称", "warning");
+        showToast("请输入影片名称", "warning", 3000);
         return;
       }
       

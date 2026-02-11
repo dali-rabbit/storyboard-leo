@@ -69,10 +69,10 @@ def load_plugins():
                 continue
 
             _loaded_plugins[plugin_name] = module.generate_images
-            print(f"[Plugin] ✅ 成功加载: {plugin_name}")
+            print(f"[Plugin] [OK] 成功加载: {plugin_name}")
 
         except Exception as e:
-            print(f"[Plugin] ❌ 加载失败 {plugin_name}: {e}")
+            print(f"[Plugin] [FAIL] 加载失败 {plugin_name}: {e}")
 
 
 def get_plugin(name):

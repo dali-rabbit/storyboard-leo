@@ -23,13 +23,23 @@ from film_manager import (
     update_quick_access_image, remove_quick_access_image,
     init_default_film, migrate_existing_data, DEFAULT_FILM_ID
 )
+from plugin_settings import (
+    load_plugin_settings, save_plugin_settings, 
+    get_enabled_plugins, AVAILABLE_PLUGINS, DEFAULT_PLUGINS
+)
 from plugins import get_face_swap_plugin
 from test_gen_api import generate_via_image_fallback
 from uploader import UploadError, upload_file
 
-# 缓存文件路径（按影片隔离）
-CACHE_FILE = "history/upload.cache"
-cache_lock = threading.Lock()  # 简单线程锁，避免并发写冲突
+# 缓存锁（避免并发写冲突）
+cache_lock = threading.Lock()
+
+
+def get_cache_file(film_id=None):
+    """获取缓存文件路径"""
+    if film_id:
+        return f"films/{film_id}/upload.cache"
+    return "history/upload.cache"  # 默认缓存文件（兼容旧版）
 
 load_dotenv()
 
@@ -74,8 +84,42 @@ def get_film_dirs(film_id):
 
 
 def save_image_from_url(url: str, folder: Path) -> str:
-    """从 URL 下载图片，保存到 folder，返回本地相对路径（如 'results/abc.jpg'）"""
+    """从 URL 下载图片或解析 base64 data URI，保存到 folder，返回本地相对路径"""
+    from PIL import Image
+    
     try:
+        # 处理 base64 data URI
+        if url.startswith("data:image"):
+            # 解析 data URI: data:image/png;base64,xxxxx
+            header, b64_data = url.split(",", 1)
+            
+            # 推测文件类型
+            ext = ".jpg"  # 默认 jpg
+            if "png" in header:
+                ext = ".png"
+            elif "webp" in header:
+                ext = ".webp"
+            
+            # 解码 base64
+            image_data = base64.b64decode(b64_data)
+            
+            filename = str(uuid.uuid4()) + ext
+            filepath = folder / filename
+            
+            with open(filepath, "wb") as f:
+                f.write(image_data)
+            
+            # 统一转为 JPG
+            if ext != ".jpg":
+                img = Image.open(filepath).convert("RGB")
+                jpg_path = filepath.with_suffix(".jpg")
+                img.save(jpg_path, "JPEG", quality=92)
+                filepath.unlink()
+                filepath = jpg_path
+            
+            return str(filepath.relative_to(Path(".")))
+        
+        # 处理普通 URL
         resp = requests.get(url, stream=True, timeout=30)
         if resp.status_code != 200:
             raise Exception(f"HTTP {resp.status_code}")
@@ -237,7 +281,7 @@ def generate():
     with current_task_lock:
         data = request.get_json()
         image_urls = data.get("image_urls", [])  # ← 这是 ImgBB URLs，正确！
-        prompt = data.get("prompt", "").strip()
+        prompt = (data.get("prompt") or "").strip()
         size = data.get("size", "2K")
         aspect_ratio = data.get("aspect_ratio", "auto")
         film_id = data.get("film_id", DEFAULT_FILM_ID)
@@ -246,18 +290,41 @@ def generate():
             return jsonify({"error": "Prompt is required"}), 400
 
         try:
-            result_urls = generate_via_image_fallback(
+            # 获取用户配置的插件设置
+            plugin_settings = load_plugin_settings(film_id)
+            fallback_order = [s["name"] for s in plugin_settings if s.get("enabled", False)]
+            
+            if not fallback_order:
+                # 如果没有启用的插件，使用默认
+                fallback_order = [p["name"] for p in DEFAULT_PLUGINS]
+            
+            # 构建模型配置
+            plugin_models = {}
+            for setting in plugin_settings:
+                if setting.get("model"):
+                    plugin_models[setting["name"]] = setting["model"]
+            
+            print(f"[Generate] 使用插件顺序: {fallback_order}")
+            print(f"[Generate] 插件模型配置: {plugin_models}")
+            
+            gen_result = generate_via_image_fallback(
                 image_urls=image_urls,
                 prompt=prompt,
                 size=size,
                 ar=aspect_ratio,
-                fallback_order=["nano_banana"],
+                fallback_order=fallback_order,
+                plugin_models=plugin_models,
             )
         except Exception as e:
             return jsonify({"error": f"Generation failed: {str(e)}"}), 500
 
-        if not result_urls:
+        if not gen_result:
             return jsonify({"error": "All APIs failed to generate image"}), 500
+
+        # 提取生成结果和耗时
+        result_urls = gen_result["urls"] if isinstance(gen_result, dict) else gen_result
+        gen_elapsed = gen_result.get("elapsed", 0) if isinstance(gen_result, dict) else 0
+        gen_plugin = gen_result.get("plugin", "") if isinstance(gen_result, dict) else ""
 
         # ✅ 获取影片目录
         dirs = get_film_dirs(film_id)
@@ -287,6 +354,8 @@ def generate():
             "prompt": prompt,
             "size": size,
             "aspect_ratio": aspect_ratio,
+            "gen_elapsed": gen_elapsed,  # 生成耗时（秒）
+            "gen_plugin": gen_plugin,  # 使用的插件
         }
 
         record_path = dirs["history"] / f"{record_id}.json"
@@ -299,6 +368,8 @@ def generate():
                 "success": True,
                 "result_urls": local_result_paths,  # 前端用本地路径显示
                 "record_id": record_id,
+                "elapsed": gen_elapsed,  # 生成耗时（秒，仅包含 API 调用时间）
+                "plugin": gen_plugin,  # 使用的插件
             }
         )
 
@@ -391,10 +462,10 @@ def quick_upload():
         return jsonify({"error": "External upload failed"}), 500
 
 
-def load_cache():
-    if os.path.exists(CACHE_FILE):
+def load_cache(cache_file="history/upload.cache"):
+    if os.path.exists(cache_file):
         try:
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            with open(cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             print(f"[Cache Load Error] {e}")
@@ -402,9 +473,11 @@ def load_cache():
     return {}
 
 
-def save_cache(cache):
+def save_cache(cache, cache_file="history/upload.cache"):
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"[Cache Save Error] {e}")
@@ -416,25 +489,43 @@ def quick_upload_2():
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
 
-    # 安全处理路径：移除开头的斜杠（你已做），并标准化
+    # 安全处理路径
     local_path = data.get("local_path", "")
+    film_id = data.get("film_id", DEFAULT_FILM_ID)
+    
     if not local_path or not isinstance(local_path, str):
         return jsonify({"error": "Invalid local_path"}), 400
 
+    print(f"[quick-upload-2] 原始路径: {local_path}, 影片: {film_id}")
+
+    # 移除开头的 /history/ 前缀（前端路径格式为 /history/films/...）
+    # 实际文件路径是 films/...
+    if local_path.startswith("/history/"):
+        local_path = local_path[9:]  # 去掉 "/history/"
+    elif local_path.startswith("/"):
+        local_path = local_path[1:]  # 只去掉开头的 /
+
     # 标准化路径（防止 ../ 等）
-    local_path = os.path.normpath(local_path.lstrip("/"))
+    local_path = os.path.normpath(local_path)
     if local_path.startswith("..") or os.path.isabs(local_path):
         return jsonify({"error": "Invalid path"}), 400
 
-    full_local_path = os.path.join(os.getcwd(), local_path)  # 假设相对当前工作目录
+    full_local_path = os.path.join(os.getcwd(), local_path)
+    print(f"[quick-upload-2] 查找文件: {full_local_path}")
+    
     if not os.path.exists(full_local_path):
+        print(f"[quick-upload-2] 文件不存在: {full_local_path}")
         return jsonify({"error": "File not found"}), 404
 
+    # 获取影片缓存文件
+    cache_file = get_cache_file(film_id)
+    
     # 读取缓存
     with cache_lock:
-        cache = load_cache()
+        cache = load_cache(cache_file)
         if local_path in cache:
             # 命中缓存，直接返回
+            print(f"[quick-upload-2] 缓存命中")
             return jsonify(
                 {
                     "url": cache[local_path],
@@ -445,12 +536,14 @@ def quick_upload_2():
 
         # 未命中，执行上传
         try:
+            print(f"[quick-upload-2] 缓存未命中，开始上传")
             external_url = upload_file(
                 full_local_path, os.path.basename(full_local_path)
             )
             # 写入缓存
             cache[local_path] = external_url
-            save_cache(cache)
+            save_cache(cache, cache_file)
+            print(f"[quick-upload-2] 上传成功，已缓存")
             return jsonify(
                 {
                     "url": external_url,
@@ -563,6 +656,68 @@ def delete_history_record(record_id):
         return jsonify({"error": "Delete failed"}), 500
 
 
+@app.route("/history/batch-delete", methods=["POST"])
+def batch_delete_history():
+    """批量删除历史记录（JSON + 本地图片）"""
+    try:
+        data = request.get_json()
+        record_ids = data.get("record_ids", [])
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
+        
+        if not record_ids:
+            return jsonify({"error": "No record IDs provided"}), 400
+        
+        dirs = get_film_dirs(film_id)
+        deleted_count = 0
+        failed_ids = []
+        
+        for record_id in record_ids:
+            try:
+                # 1. 找到 JSON 文件
+                json_path = None
+                for f in dirs["history"].glob("*.json"):
+                    if f.stem.startswith(record_id):
+                        json_path = f
+                        break
+                
+                if not json_path:
+                    failed_ids.append(record_id)
+                    continue
+                
+                # 2. 读取记录，获取所有本地图片路径
+                with open(json_path, "r", encoding="utf-8") as fp:
+                    record = json.load(fp)
+                
+                all_local_paths = record.get("local_result_paths", [])
+                
+                # 3. 删除 JSON 文件
+                json_path.unlink()
+                
+                # 4. 删除关联的本地图片
+                for rel_path in all_local_paths:
+                    if rel_path.startswith("/"):
+                        rel_path = rel_path[1:]
+                    full_path = Path(rel_path)
+                    if full_path.exists():
+                        full_path.unlink()
+                        print(f"[Batch Delete] 删除图片: {full_path}")
+                
+                deleted_count += 1
+                
+            except Exception as e:
+                print(f"[Batch Delete] 删除 {record_id} 失败: {e}")
+                failed_ids.append(record_id)
+        
+        return jsonify({
+            "success": True,
+            "deleted_count": deleted_count,
+            "failed_ids": failed_ids
+        })
+    except Exception as e:
+        print(f"[Batch Delete Error] {e}")
+        return jsonify({"error": "Batch delete failed"}), 500
+
+
 # @app.route("/swap_face", methods=["POST"])
 # def swap_face():
 #     """
@@ -576,7 +731,7 @@ def delete_history_record(record_id):
 #         try:
 #             data = request.get_json()
 #             source_url = data.get("source_url", "").strip()  # 图1：被换脸的图
-#             face_url = data.get("face_url", "").strip()  # 图2：提供人脸的图
+#             face_url = (data.get("face_url") or "").strip()  # 图2：提供人脸的图
 
 #             if not source_url or not face_url:
 #                 return jsonify({"error": "Missing source_url or face_url"}), 400
@@ -680,6 +835,62 @@ def api_delete_film(film_id):
     return jsonify({"success": True})
 
 
+# ========== 插件设置 API ==========
+
+@app.route("/api/films/<film_id>/plugin-settings", methods=["GET"])
+def api_get_plugin_settings(film_id):
+    """获取影片的插件设置"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    settings = load_plugin_settings(film_id)
+    return jsonify({
+        "settings": settings,
+        "available_plugins": AVAILABLE_PLUGINS
+    })
+
+
+@app.route("/api/films/<film_id>/plugin-settings", methods=["PUT"])
+def api_update_plugin_settings(film_id):
+    """更新影片的插件设置"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    data = request.get_json()
+    settings = data.get("settings", [])
+    
+    # 验证设置格式
+    if not isinstance(settings, list):
+        return jsonify({"error": "Invalid settings format"}), 400
+    
+    # 过滤无效插件
+    valid_settings = [
+        s for s in settings 
+        if s.get("name") in AVAILABLE_PLUGINS
+    ]
+    
+    if not valid_settings:
+        return jsonify({"error": "No valid plugins"}), 400
+    
+    if save_plugin_settings(film_id, valid_settings):
+        return jsonify({"success": True, "settings": valid_settings})
+    else:
+        return jsonify({"error": "Failed to save settings"}), 500
+
+
+@app.route("/api/films/<film_id>/enabled-plugins", methods=["GET"])
+def api_get_enabled_plugins(film_id):
+    """获取启用的插件列表（用于生成）"""
+    film = get_film(film_id)
+    if not film:
+        return jsonify({"error": "影片不存在"}), 404
+    
+    enabled = get_enabled_plugins(film_id)
+    return jsonify({"plugins": enabled})
+
+
 # ========== 快捷访问 API（按影片隔离） ==========
 
 @app.route("/api/films/<film_id>/quick-access", methods=["GET"])
@@ -741,7 +952,9 @@ def api_delete_quick_access(film_id, local_path):
     # 补回前导斜杠（Flask path 会吃掉）
     full_local_path = "/" + local_path if not local_path.startswith("/") else local_path
     
-    remove_quick_access_image(film_id, local_path)
+    print(f"[QuickAccess Delete] film_id={film_id}, local_path={full_local_path}")
+    
+    remove_quick_access_image(film_id, full_local_path)
     return jsonify({"success": True})
 
 
@@ -920,5 +1133,214 @@ def delete_storyboard(id):
         return jsonify({"success": False, "error": "Failed to delete"}), 500
 
 
+@app.route("/region_edit", methods=["POST"])
+def region_edit():
+    """
+    区域编辑API：对图片的指定区域进行编辑（换脸或图生图），并将结果覆盖回原图
+    
+    请求参数:
+    - original_url: 原始图片URL
+    - region: {x, y, width, height, aspect_ratio} 选区信息（归一化坐标0-1）
+    - edit_type: "face_swap" 或 "img2img"
+    - face_url: 换脸模式下的参考面部URL
+    - prompt: 图生图模式下的提示词
+    - extra_image_urls: 图生图模式下的额外参考图URL列表（可选）
+    - film_id: 影片ID
+    """
+    try:
+        data = request.get_json()
+        original_url = (data.get("original_url") or "").strip()
+        region = data.get("region", {})
+        edit_type = (data.get("edit_type") or "").strip()
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
+        
+        if not original_url:
+            return jsonify({"error": "Missing original_url"}), 400
+        
+        if not region:
+            return jsonify({"error": "Missing region data"}), 400
+        
+        # 获取选区参数
+        rx = region.get("x", 0)
+        ry = region.get("y", 0)
+        rw = region.get("width", 1)
+        rh = region.get("height", 1)
+        aspect_ratio = region.get("aspect_ratio", "1:1")
+        
+        # 加载原始图片（支持 HTTP URL、Data URL 和本地路径）
+        try:
+            if original_url.startswith("data:image"):
+                # Data URL (base64)
+                header, encoded = original_url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                original_image = Image.open(BytesIO(image_data)).convert("RGB")
+            elif original_url.startswith("http://") or original_url.startswith("https://"):
+                # HTTP URL
+                resp = requests.get(original_url, timeout=30)
+                resp.raise_for_status()
+                original_image = Image.open(BytesIO(resp.content)).convert("RGB")
+            elif os.path.exists(original_url):
+                # 本地文件路径
+                original_image = Image.open(original_url).convert("RGB")
+            else:
+                return jsonify({"error": f"Unsupported image source: {original_url[:50]}..."}), 400
+        except Exception as e:
+            print(f"[Region Edit] 加载原始图片失败: {e}")
+            return jsonify({"error": "Failed to load original image"}), 500
+        
+        orig_w, orig_h = original_image.size
+        
+        # 计算选区的像素坐标
+        crop_x = int(rx * orig_w)
+        crop_y = int(ry * orig_h)
+        crop_w = int(rw * orig_w)
+        crop_h = int(rh * orig_h)
+        
+        # 确保选区不超出边界
+        crop_x = max(0, min(crop_x, orig_w - 1))
+        crop_y = max(0, min(crop_y, orig_h - 1))
+        crop_w = min(crop_w, orig_w - crop_x)
+        crop_h = min(crop_h, orig_h - crop_y)
+        
+        # 裁剪选区
+        cropped = original_image.crop((crop_x, crop_y, crop_x + crop_w, crop_y + crop_h))
+        print(f"[Region Edit] 选区尺寸: {cropped.size}, 原图尺寸: {original_image.size}")
+        print(f"[Region Edit] 选区坐标: ({crop_x}, {crop_y}, {crop_x + crop_w}, {crop_y + crop_h})")
+        
+        # 将裁剪后的图片保存到临时文件并上传
+        dirs = get_film_dirs(film_id)
+        dirs["inputs"].mkdir(parents=True, exist_ok=True)
+        
+        temp_crop_path = dirs["inputs"] / f"region_crop_{uuid.uuid4().hex}.jpg"
+        cropped.save(temp_crop_path, "JPEG", quality=95)
+        print(f"[Region Edit] 选区已保存: {temp_crop_path}")
+        
+        # 上传裁剪后的图片
+        try:
+            cropped_url = upload_file(str(temp_crop_path), temp_crop_path.name)
+            print(f"[Region Edit] 选区已上传: {cropped_url[:80]}...")
+        except Exception as e:
+            print(f"[Region Edit] 上传裁剪图片失败: {e}")
+            temp_crop_path.unlink(missing_ok=True)
+            return jsonify({"error": "Failed to upload cropped image"}), 500
+        
+        # 执行编辑
+        if edit_type == "face_swap":
+            face_url = (data.get("face_url") or "").strip()
+            if not face_url:
+                temp_crop_path.unlink(missing_ok=True)
+                return jsonify({"error": "Missing face_url"}), 400
+            
+            # 获取换脸插件
+            swap_func = get_face_swap_plugin()
+            if swap_func is None:
+                temp_crop_path.unlink(missing_ok=True)
+                return jsonify({"error": "Face swap plugin not available"}), 500
+            
+            try:
+                # 调用换脸API
+                print(f"[Region Edit] 调用换脸: source={cropped_url[:80]}..., face={face_url[:80]}...")
+                result_url = swap_func(source_image_url=cropped_url, face_image_url=face_url)
+                print(f"[Region Edit] 换脸结果: {result_url[:80]}...")
+            except Exception as e:
+                print(f"[Region Edit] 换脸失败: {e}")
+                temp_crop_path.unlink(missing_ok=True)
+                return jsonify({"error": f"Face swap failed: {str(e)}"}), 500
+                
+        elif edit_type == "img2img":
+            prompt = (data.get("prompt") or "").strip()
+            if not prompt:
+                temp_crop_path.unlink(missing_ok=True)
+                return jsonify({"error": "Missing prompt"}), 400
+            
+            extra_urls = data.get("extra_image_urls", [])
+            
+            # 构建图片列表：选区图片 + 额外图片
+            image_urls = [cropped_url] + extra_urls
+            
+            # 获取插件设置
+            try:
+                plugin_settings = load_plugin_settings(film_id)
+                fallback_order = [s["name"] for s in plugin_settings if s.get("enabled", False)]
+                if not fallback_order:
+                    fallback_order = [p["name"] for p in DEFAULT_PLUGINS]
+                
+                plugin_models = {}
+                for setting in plugin_settings:
+                    if setting.get("model"):
+                        plugin_models[setting["name"]] = setting["model"]
+            except Exception as e:
+                print(f"[Region Edit] 加载插件设置失败: {e}")
+                fallback_order = [p["name"] for p in DEFAULT_PLUGINS]
+                plugin_models = {}
+            
+            # 调用图生图API
+            try:
+                gen_result = generate_via_image_fallback(
+                    image_urls=image_urls,
+                    prompt=prompt,
+                    size="auto",  # 使用auto让API根据输入图片决定
+                    ar=aspect_ratio,  # 使用选区的长宽比
+                    fallback_order=fallback_order,
+                    plugin_models=plugin_models,
+                )
+                
+                if not gen_result:
+                    temp_crop_path.unlink(missing_ok=True)
+                    return jsonify({"error": "Image generation failed"}), 500
+                
+                result_url = gen_result["urls"][0] if isinstance(gen_result, dict) else gen_result[0]
+                
+            except Exception as e:
+                print(f"[Region Edit] 图生图失败: {e}")
+                temp_crop_path.unlink(missing_ok=True)
+                return jsonify({"error": f"Image generation failed: {str(e)}"}), 500
+        else:
+            temp_crop_path.unlink(missing_ok=True)
+            return jsonify({"error": "Invalid edit_type"}), 400
+        
+        # 下载编辑结果
+        try:
+            result_resp = requests.get(result_url, timeout=60)
+            result_resp.raise_for_status()
+            result_image = Image.open(BytesIO(result_resp.content)).convert("RGB")
+        except Exception as e:
+            print(f"[Region Edit] 下载编辑结果失败: {e}")
+            temp_crop_path.unlink(missing_ok=True)
+            return jsonify({"error": "Failed to download edited image"}), 500
+        
+        # 清理临时文件
+        temp_crop_path.unlink(missing_ok=True)
+        
+        # 强制调整结果图片尺寸以匹配选区（如果不同）
+        print(f"[Region Edit] 编辑结果尺寸: {result_image.size}, 选区尺寸: ({crop_w}, {crop_h})")
+        if result_image.size != (crop_w, crop_h):
+            result_image = result_image.resize((crop_w, crop_h), Image.LANCZOS)
+            print(f"[Region Edit] 已调整尺寸为: ({crop_w}, {crop_h})")
+        
+        # 将编辑结果覆盖回原图
+        final_image = original_image.copy()
+        final_image.paste(result_image, (crop_x, crop_y))
+        print(f"[Region Edit] 已覆盖回原图位置: ({crop_x}, {crop_y})")
+        
+        # 保存最终结果
+        dirs["results"].mkdir(parents=True, exist_ok=True)
+        result_filename = f"region_edit_{uuid.uuid4().hex}.jpg"
+        result_path = dirs["results"] / result_filename
+        final_image.save(result_path, "JPEG", quality=95)
+        
+        # 计算相对路径
+        rel_path = str(result_path.relative_to(Path(".")))
+        
+        return jsonify({
+            "success": True,
+            "local_path": "/history/" + rel_path.replace("\\", "/"),
+        })
+        
+    except Exception as e:
+        print(f"[Region Edit Error] {e}")
+        return jsonify({"error": f"Region edit failed: {str(e)}"}), 500
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)

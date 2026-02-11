@@ -487,3 +487,46 @@ body {
     font-size: 12px;
     border-radius: 50%;
 }
+
+/* 快捷访问拖拽上传样式 */
+.quick-images-container.drag-over {
+    background-color: rgba(106, 90, 205, 0.2);
+    border: 2px dashed #6a5acd;
+    border-radius: 8px;
+}
+
+#quickAccessUploadBtn {
+    font-weight: bold;
+    font-size: 16px;
+    line-height: 1;
+}
+
+/* 历史记录批量操作样式 */
+.history-card .history-checkbox {
+    top: 8px;
+    left: 8px;
+    z-index: 10;
+}
+
+.history-checkbox .form-check-input {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    background-color: rgba(0, 0, 0, 0.7);
+    border-color: rgba(255, 255, 255, 0.8);
+}
+
+.history-checkbox .form-check-input:checked {
+    background-color: #dc3545;
+    border-color: #dc3545;
+}
+
+#batchDeleteHistoryBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.history-card.selected {
+    border: 2px solid #dc3545;
+    box-shadow: 0 0 10px rgba(220, 53, 69, 0.5);
+}

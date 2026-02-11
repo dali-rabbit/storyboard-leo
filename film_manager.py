@@ -223,9 +223,20 @@ def update_quick_access_image(film_id, local_path, updates):
 def remove_quick_access_image(film_id, local_path):
     """从快捷访问中移除图片"""
     data = load_quick_access(film_id)
+    print(f"[FilmManager] 删除前数据: {len(data)} 条")
+    print(f"[FilmManager] 尝试删除: {local_path}")
+    print(f"[FilmManager] 现有路径: {[img.get('localPath') for img in data]}")
+    
+    original_count = len(data)
     data = [img for img in data if img.get("localPath") != local_path]
-    save_quick_access(film_id, data)
-    return True
+    
+    if len(data) < original_count:
+        print(f"[FilmManager] 删除成功，剩余 {len(data)} 条")
+        save_quick_access(film_id, data)
+        return True
+    else:
+        print(f"[FilmManager] 未找到匹配项，删除失败")
+        return False
 
 
 # ========== 数据迁移 ==========

@@ -18,6 +18,11 @@ function bringWindowToFront(el) {
   async function initFilmManager() {
     const filmId = await window.FilmManager.init();
     
+    // 加载当前影片的插件设置
+    if (window.PluginSettings) {
+      await window.PluginSettings.load(filmId);
+    }
+    
     // 加载当前影片的快捷访问数据
     await window.QuickAccess.load(filmId);
     window.QuickAccess.renderSidebar();
@@ -38,6 +43,11 @@ function bringWindowToFront(el) {
         window.UploadModule.renderPreview();
       }
       
+      // 加载新影片的插件设置
+      if (window.PluginSettings) {
+        await window.PluginSettings.load(film.id);
+      }
+      
       // 加载新影片的快捷访问
       await window.QuickAccess.load(film.id);
       window.QuickAccess.renderSidebar();
@@ -53,19 +63,44 @@ function bringWindowToFront(el) {
   }
 
   // 历史窗口分页
+  // 历史记录多选模式状态
+  let historyMultiSelectMode = false;
+  
   function loadHistoryWindowPage(page, limit = 12) {
     currentHistoryWindowPage = page;
     const filmId = window.FilmManager.getCurrentFilmId();
     $.get(`/history?page=${page}&limit=${limit}&film_id=${filmId}`, function (data) {
-      let html = "";
+      // 添加批量操作标题栏
+      const multiSelectDisplay = historyMultiSelectMode ? 'style="display: flex;"' : 'style="display: none;"';
+      let html = `
+        <div class="col-12 mb-3 d-flex align-items-center gap-2">
+          <button type="button" class="btn btn-sm ${historyMultiSelectMode ? 'btn-primary' : 'btn-outline-secondary'}" id="toggleMultiSelectBtn">
+            ${historyMultiSelectMode ? '退出多选' : '多选模式'}
+          </button>
+          <div id="multiSelectControls" class="align-items-center gap-2" ${multiSelectDisplay}>
+            <div class="form-check mb-0">
+              <input class="form-check-input" type="checkbox" id="selectAllHistory">
+              <label class="form-check-label text-light" for="selectAllHistory">全选</label>
+            </div>
+            <span class="text-muted">|</span>
+            <span class="text-muted small">已选 <span id="selectedHistoryCount">0</span> 项</span>
+            <button type="button" class="btn btn-sm btn-danger" id="batchDeleteHistoryBtn" disabled>
+              <i class="bi bi-trash"></i> 删除选中
+            </button>
+          </div>
+        </div>
+      `;
+      
       data.records.forEach((item) => {
         const url = item.result_paths[0] || "";
+        const checkboxDisplay = historyMultiSelectMode ? 'style="display: block;"' : 'style="display: none;"';
         html += `
-          <div class="col-6 col-sm-4 col-md-3 mb-3">
-            <div class="card history-card" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
-
-                <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
-
+          <div class="col-6 col-sm-4 col-md-3 mb-3 history-item-container">
+            <div class="card history-card position-relative" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}' data-id="${item.id}">
+              <div class="history-checkbox position-absolute" ${checkboxDisplay}>
+                <input type="checkbox" class="form-check-input history-select" value="${item.id}" data-item='${JSON.stringify(item).replace(/'/g, "&#39;")}'>
+              </div>
+              <img src="${url}" class="w-100" style="aspect-ratio:1/1;object-fit:cover;" draggable="true">
             </div>
           </div>
         `;
@@ -77,7 +112,92 @@ function bringWindowToFront(el) {
         pg += `<li class="page-item ${i === page ? "active" : ""}"><a class="page-link" href="#">${i}</a></li>`;
       }
       $("#historyWindowPagination").html(pg);
+      
+      // 绑定批量操作事件
+      bindBatchHistoryEvents();
     });
+  }
+  
+  // 批量操作事件绑定
+  function bindBatchHistoryEvents() {
+    // 多选模式切换
+    $("#toggleMultiSelectBtn").off("click").on("click", function () {
+      historyMultiSelectMode = !historyMultiSelectMode;
+      loadHistoryWindowPage(currentHistoryWindowPage);
+    });
+    
+    // 全选/取消全选
+    $("#selectAllHistory").off("change").on("change", function () {
+      const checked = $(this).is(":checked");
+      $(".history-select").prop("checked", checked);
+      $(".history-card").toggleClass("selected", checked);
+      updateSelectedCount();
+    });
+    
+    // 单个选择变化（点击复选框时阻止冒泡触发卡片点击）
+    $(document).off("click", ".history-select").on("click", ".history-select", function (e) {
+      e.stopPropagation();
+    });
+    
+    $(document).off("change", ".history-select").on("change", ".history-select", function () {
+      updateSelectedCount();
+      
+      // 更新卡片样式
+      $(this).closest(".history-card").toggleClass("selected", $(this).is(":checked"));
+      
+      // 更新全选状态
+      const allChecked = $(".history-select").length === $(".history-select:checked").length;
+      $("#selectAllHistory").prop("checked", allChecked);
+    });
+    
+    // 批量删除
+    $("#batchDeleteHistoryBtn").off("click").on("click", async function () {
+      const selectedIds = $(".history-select:checked").map(function () {
+        return $(this).val();
+      }).get();
+      
+      if (selectedIds.length === 0) {
+        showToast("请先选择要删除的记录", "warning", 3000);
+        return;
+      }
+      
+      if (!confirm(`确定要删除选中的 ${selectedIds.length} 条历史记录吗？\n\n此操作不可恢复，本地图片也将被删除。`)) {
+        return;
+      }
+      
+      const filmId = window.FilmManager.getCurrentFilmId();
+      
+      try {
+        const res = await fetch("/history/batch-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ record_ids: selectedIds, film_id: filmId }),
+        });
+        
+        const result = await res.json();
+        
+        if (result.success) {
+          showToast(`成功删除 ${result.deleted_count} 条记录`, "success", 3000);
+          if (result.failed_ids && result.failed_ids.length > 0) {
+            showToast(`${result.failed_ids.length} 条删除失败`, "warning", 5000);
+          }
+          // 重新加载当前页
+          loadHistoryWindowPage(currentHistoryWindowPage);
+        } else {
+          showToast("删除失败: " + (result.error || "未知错误"), "error", 0);
+        }
+      } catch (e) {
+        console.error("批量删除失败:", e);
+        showToast("删除请求失败", "error", 0);
+      }
+    });
+  }
+  
+  // 更新选中数量
+  function updateSelectedCount() {
+    const count = $(".history-select:checked").length;
+    $("#selectedHistoryCount").text(count);
+    $("#batchDeleteHistoryBtn").prop("disabled", count === 0);
   }
 
   // ===== 提示词预览 =====
@@ -126,6 +246,7 @@ function bringWindowToFront(el) {
     }
 
     isGenerating = true;
+    const startTime = Date.now();
     $(this).prop("disabled", true).text("生成中...");
 
     const filmId = window.FilmManager.getCurrentFilmId();
@@ -144,7 +265,11 @@ function bringWindowToFront(el) {
       }),
       success: function (res) {
         if (res.success) {
-          let html = "";
+          // 使用后端返回的纯生成耗时（不含上传、迁移等预处理时间）
+          const elapsed = res.elapsed || 0;
+          const pluginName = res.plugin || '';
+          const pluginBadge = pluginName ? `<span class="badge bg-secondary ms-1">${pluginName}</span>` : '';
+          let html = `<div class="text-muted small mb-2">⚡ 生成耗时: ${elapsed}秒${pluginBadge}</div>`;
           res.result_urls.forEach((url) => {
             html += `
                             <div class="mb-3">
@@ -226,6 +351,13 @@ function bringWindowToFront(el) {
       loadHistoryWindowPage(parseInt($(this).text()));
     });
 
+    // 插件设置按钮
+    $(document).on("click", "#pluginSettingsBtn", function () {
+      if (window.PluginSettings) {
+        window.PluginSettings.showModal();
+      }
+    });
+
     // 初始化
     updatePromptPreview();
 
@@ -239,8 +371,24 @@ function bringWindowToFront(el) {
 
     // ===== 拖拽到目标区域逻辑 =====
 
-    // 点击历史卡片，弹出详情浮窗
+    // 点击历史卡片
     $(document).on("click", ".history-card", function (e) {
+      // 多选模式下，点击卡片切换选中状态
+      if (historyMultiSelectMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        const $checkbox = $(this).find(".history-select");
+        $checkbox.prop("checked", !$checkbox.is(":checked"));
+        $(this).toggleClass("selected", $checkbox.is(":checked"));
+        updateSelectedCount();
+        
+        // 更新全选状态
+        const allChecked = $(".history-select").length === $(".history-select:checked").length;
+        $("#selectAllHistory").prop("checked", allChecked);
+        return;
+      }
+      
+      // 正常模式下，点击打开详情
       const item = $(this).data("item");
       showHistoryDetailModal(item);
     });
@@ -377,10 +525,11 @@ function bringWindowToFront(el) {
     // 删除记录
     $(document).on("click", "#deleteHistoryBtn", function () {
       const recordId = $(this).data("id");
+      const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
       if (!confirm("确定要删除这条历史记录吗？")) return;
 
       $.ajax({
-        url: `/history/${recordId}`,
+        url: `/history/${recordId}?film_id=${filmId}`,
         method: "DELETE",
         success: function (res) {
           if (res.success) {
@@ -445,10 +594,11 @@ function bringWindowToFront(el) {
         }
 
         try {
+          const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
           const uploadRes = await fetch("/quick-upload-2", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ local_path: usableLocal }),
+            body: JSON.stringify({ local_path: usableLocal, film_id: filmId }),
           });
 
           if (!uploadRes.ok) throw new Error("上传失败");
@@ -504,6 +654,10 @@ function bringWindowToFront(el) {
         $("#quickAccessWindow").addClass("d-none");
       } else if (target === "history-window") {
         $("#historyWindow").addClass("d-none");
+        // 关闭时自动退出多选模式
+        if (historyMultiSelectMode) {
+          historyMultiSelectMode = false;
+        }
       }
     });
 
@@ -521,12 +675,6 @@ function bringWindowToFront(el) {
         loadHistoryWindowPage(page);
       },
     );
-
-    // 历史窗口卡片点击
-    $(document).on("click", "#historyWindowList .history-card", function () {
-      const item = $(this).data("item");
-      window.showHistoryDetailModal(item);
-    });
 
     // ===== 拖拽移动浮动窗口 =====
     function makeWindowDraggable(windowSelector) {

@@ -115,6 +115,11 @@ function render() {
     const rectW = regionEditState.width * iw * scale;
     const rectH = regionEditState.height * ih * scale;
     
+    // 计算真实像素尺寸
+    const realWidth = Math.round(regionEditState.width * iw);
+    const realHeight = Math.round(regionEditState.height * ih);
+    const sizeText = `${realWidth} x ${realHeight} px`;
+    
     // 根据是否已确定显示不同样式
     if (regionEditState.regionConfirmed) {
       // 已确定：绿色边框，显示"已固定选区"
@@ -123,11 +128,26 @@ function render() {
       ctx.setLineDash([]);
       ctx.strokeRect(rectX, rectY, rectW, rectH);
       
-      // 显示文字
-      ctx.fillStyle = "#00ff00";
+      // 显示文字（带背景）
       ctx.font = "bold 14px Arial";
       ctx.textAlign = "center";
-      ctx.fillText("已固定选区", rectX + rectW / 2, rectY - 10);
+      const textY = rectY - 25;
+      
+      // 绘制文字背景（半透明黑色）
+      const textWidth = ctx.measureText("已固定选区").width;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(rectX + rectW / 2 - textWidth / 2 - 5, textY - 14, textWidth + 10, 18);
+      
+      ctx.fillStyle = "#00ff00";
+      ctx.fillText("已固定选区", rectX + rectW / 2, textY);
+      
+      // 显示像素尺寸（在选区下方）
+      ctx.font = "12px Arial";
+      const sizeTextWidth = ctx.measureText(sizeText).width;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(rectX + rectW / 2 - sizeTextWidth / 2 - 5, rectY + rectH + 4, sizeTextWidth + 10, 16);
+      ctx.fillStyle = "#00ff00";
+      ctx.fillText(sizeText, rectX + rectW / 2, rectY + rectH + 16);
     } else {
       // 选取中：红色边框，显示控制点
       ctx.strokeStyle = "#ff6b6b";
@@ -157,6 +177,18 @@ function render() {
         ctx.arc(p.x, p.y, halfHandle, 0, Math.PI * 2);
         ctx.fill();
       });
+      
+      // 显示像素尺寸（在选区下方）
+      ctx.font = "bold 12px Arial";
+      ctx.textAlign = "center";
+      const sizeTextWidth = ctx.measureText(sizeText).width;
+      
+      // 绘制文字背景
+      ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+      ctx.fillRect(rectX + rectW / 2 - sizeTextWidth / 2 - 5, rectY + rectH + 4, sizeTextWidth + 10, 16);
+      
+      ctx.fillStyle = "#ff6b6b";
+      ctx.fillText(sizeText, rectX + rectW / 2, rectY + rectH + 16);
     }
 
     ctx.setLineDash([]);

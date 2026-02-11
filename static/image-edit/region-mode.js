@@ -64,30 +64,39 @@
       </div>
     `;
     
-    // 编辑结果显示缩略图
+    // 编辑结果显示缩略图（带hover按钮）
     regionEditResults.forEach((result, idx) => {
       const isActive = idx === currentResultIndex;
       const editTypeLabel = result.type === "face_swap" ? "换脸" : "图生图";
       const editTypeIcon = result.type === "face_swap" ? "👤" : "🎨";
       
       html += `
-        <div class="result-item ${isActive ? 'active' : ''}" data-idx="${idx}" style="cursor: pointer; padding: 8px; margin-bottom: 8px; border-radius: 4px; ${isActive ? 'background: #0d6efd;' : 'background: #2d2d2d;'} border: 2px solid ${isActive ? '#0d6efd' : 'transparent'};">
+        <div class="result-item ${isActive ? 'active' : ''}" data-idx="${idx}" 
+             style="cursor: pointer; padding: 8px; margin-bottom: 8px; border-radius: 4px; ${isActive ? 'background: #0d6efd;' : 'background: #2d2d2d;'} border: 2px solid ${isActive ? '#0d6efd' : 'transparent'}; position: relative;"
+             onmouseenter="this.querySelector('.result-actions').style.opacity='1'" 
+             onmouseleave="this.querySelector('.result-actions').style.opacity='0'">
           <div class="d-flex gap-2">
             <!-- 缩略图 -->
-            <div style="flex-shrink: 0;">
+            <div style="flex-shrink: 0; position: relative;">
               <img src="${result.url}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; ${isActive ? 'box-shadow: 0 0 0 2px #fff;' : ''}" 
                    onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2280%22><rect fill=%22%23333%22 width=%2280%22 height=%2280%22/><text fill=%22%23999%22 x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22 dy=%22.3em%22>加载失败</text></svg>'">
+              <!-- Hover 操作按钮 -->
+              <div class="result-actions" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; opacity: 0; transition: opacity 0.2s; border-radius: 4px;">
+                <button class="btn btn-sm btn-primary rerun-result" data-idx="${idx}" style="padding: 2px 8px; font-size: 11px; white-space: nowrap;">🔄 重跑</button>
+                <button class="btn btn-sm btn-outline-light edit-params" data-idx="${idx}" style="padding: 2px 8px; font-size: 11px; white-space: nowrap;">⚙️ 编辑</button>
+                <button class="btn btn-sm btn-outline-danger delete-result" data-idx="${idx}" style="padding: 2px 8px; font-size: 11px; white-space: nowrap;">🗑️ 删除</button>
+              </div>
             </div>
             <!-- 信息 -->
             <div style="flex: 1; min-width: 0; color: ${isActive ? '#fff' : '#ccc'};">
               <div class="d-flex justify-content-between align-items-start mb-1">
                 <span style="font-weight: 500;">${editTypeIcon} 结果 ${idx + 1}</span>
-                <button class="btn btn-sm btn-danger delete-result" data-idx="${idx}" style="padding: 2px 6px; font-size: 12px;">删除</button>
               </div>
               <div style="font-size: 12px; opacity: 0.8; margin-bottom: 4px;">
                 <span class="badge bg-secondary" style="font-size: 10px;">${editTypeLabel}</span>
               </div>
               ${result.params && result.params.prompt ? `<div style="font-size: 11px; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${result.params.prompt}">${result.params.prompt}</div>` : ''}
+              ${result.rerunFrom !== undefined ? `<div style="font-size: 10px; opacity: 0.5; margin-top: 2px;">↳ 重跑自结果 ${result.rerunFrom + 1}</div>` : ''}
             </div>
           </div>
         </div>
@@ -99,9 +108,27 @@
     // 添加点击事件
     container.querySelectorAll(".result-item").forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target.classList.contains("delete-result") || e.target.closest(".delete-result")) return;
+        if (e.target.closest('.result-actions')) return;
         const idx = parseInt(el.dataset.idx, 10);
         showRegionEditResult(idx);
+      });
+    });
+
+    // 添加重跑事件
+    container.querySelectorAll(".rerun-result").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.idx, 10);
+        rerunRegionEdit(idx);
+      });
+    });
+
+    // 添加编辑参数事件
+    container.querySelectorAll(".edit-params").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.idx, 10);
+        editResultParams(idx);
       });
     });
 
@@ -219,6 +246,131 @@
     }
     
     renderRegionEditResults();
+  }
+
+  // 重跑区域编辑（使用当前结果的参数重新生成）
+  async function rerunRegionEdit(idx) {
+    if (idx < 0 || idx >= regionEditResults.length) return;
+    
+    const result = regionEditResults[idx];
+    const filmId = window.FilmManager ? window.FilmManager.getCurrentFilmId() : "default";
+    
+    // 显示加载状态
+    document.getElementById("fullscreenMask").style.display = "block";
+    document.getElementById("fullscreenMask").classList.remove("d-none");
+    document.getElementById("fullscreenMask").querySelector("div > div").innerHTML = 
+      '<div class="spinner-border text-light mb-2" role="status"></div><div>正在重跑编辑...</div>';
+    
+    try {
+      const originalUrl = currentOriginalImage || regionEditState.originalImageUrl;
+      if (!originalUrl) {
+        throw new Error("无法获取原图URL");
+      }
+      
+      // 构建请求参数（复用原结果的参数）
+      const requestBody = {
+        original_url: originalUrl,
+        region: {
+          x: regionEditState.x,
+          y: regionEditState.y,
+          width: regionEditState.width,
+          height: regionEditState.height,
+          aspect_ratio: regionEditState.aspectRatio,
+        },
+        edit_type: result.type,
+        film_id: filmId,
+      };
+      
+      // 根据编辑类型添加特定参数
+      if (result.type === "face_swap") {
+        // 换脸：需要 face_url，从原结果参数中获取
+        if (!result.params || !result.params.face_url) {
+          throw new Error("无法获取换脸参数，请重新编辑");
+        }
+        requestBody.face_url = result.params.face_url;
+      } else {
+        // 图生图：需要 prompt 和 extra_image_urls
+        if (!result.params || !result.params.prompt) {
+          throw new Error("无法获取图生图参数，请重新编辑");
+        }
+        requestBody.prompt = result.params.prompt;
+        requestBody.extra_image_urls = result.params.extra_image_urls || [];
+      }
+      
+      // 调用编辑 API
+      const resp = await fetch("/region_edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      
+      const data = await resp.json();
+      if (!data.success) {
+        throw new Error(data.error || "重跑失败");
+      }
+      
+      // 添加新结果到列表（标记为重跑）
+      const newResult = {
+        url: data.local_path,
+        type: result.type,
+        width: data.width,
+        height: data.height,
+        params: result.params,  // 复用原参数
+        rerunFrom: idx,  // 标记重跑来源
+      };
+      
+      regionEditResults.push(newResult);
+      
+      renderRegionEditResults();
+      showRegionEditResult(regionEditResults.length - 1);
+      
+      showToast(`重跑完成（结果 ${regionEditResults.length}）`, "success");
+      
+    } catch (err) {
+      console.error("重跑编辑错误:", err);
+      showToast("重跑失败: " + err.message, "error");
+    } finally {
+      document.getElementById("fullscreenMask").style.display = "none";
+      document.getElementById("fullscreenMask").classList.add("d-none");
+    }
+  }
+
+  // 编辑结果参数（打开模态框修改参数后重新生成）
+  function editResultParams(idx) {
+    if (idx < 0 || idx >= regionEditResults.length) return;
+    
+    const result = regionEditResults[idx];
+    
+    // 打开编辑模态框并填充当前参数
+    document.getElementById("regionEditTypeFace").checked = result.type === "face_swap";
+    document.getElementById("regionEditTypeImg2Img").checked = result.type === "img2img";
+    
+    // 触发类型切换事件
+    document.getElementById("regionEditTypeFace").dispatchEvent(new Event("change"));
+    
+    if (result.type === "face_swap") {
+      // 换脸：保持当前选择的面部（如果有）
+      document.getElementById("regionFaceSwapSection").style.display = "block";
+      document.getElementById("regionImg2ImgSection").style.display = "none";
+    } else {
+      // 图生图：填充提示词和额外图片
+      document.getElementById("regionFaceSwapSection").style.display = "none";
+      document.getElementById("regionImg2ImgSection").style.display = "block";
+      
+      if (result.params) {
+        document.getElementById("regionImg2ImgPrompt").value = result.params.prompt || "";
+        // 恢复额外图片
+        regionEditExtraImages = result.params.extra_images || [];
+        renderRegionEditExtraImages();
+      }
+    }
+    
+    // 显示模态框
+    const modal = new bootstrap.Modal(document.getElementById("regionEditModal"));
+    modal.show();
+    
+    // 标记这是编辑模式（需要在确认编辑时知道要更新哪个结果）
+    window.__editingResultIndex = idx;
   }
 
   // 渲染额外图片列表
@@ -569,21 +721,55 @@
         if (!result.success) throw new Error(result.error || "图生图失败");
       }
 
-      // 添加结果到列表（保存选区小图的尺寸信息）
-      regionEditResults.push({
-        url: result.local_path,
-        type: editType,
-        width: result.width,
-        height: result.height,
-        params: editType === "face_swap" ? {} : { prompt: document.getElementById("regionImg2ImgPrompt")?.value || "" },
-      });
-
-      renderRegionEditResults();
-      showRegionEditResult(regionEditResults.length - 1);
+      // 构建完整的参数信息（用于重跑和编辑）
+      let params = {};
+      if (editType === "face_swap") {
+        const selectedFace = document.querySelector(".region-face-option.selected");
+        params = {
+          face_url: selectedFace ? selectedFace.dataset.url : null,
+        };
+      } else {
+        params = {
+          prompt: document.getElementById("regionImg2ImgPrompt")?.value || "",
+          extra_image_urls: regionEditExtraImages.map(img => img.url),
+          extra_images: regionEditExtraImages,  // 完整信息用于编辑时恢复
+        };
+      }
+      
+      // 检查是否是编辑模式
+      const editingIdx = window.__editingResultIndex;
+      if (editingIdx !== undefined && editingIdx >= 0 && editingIdx < regionEditResults.length) {
+        // 编辑模式：更新原结果
+        regionEditResults[editingIdx] = {
+          url: result.local_path,
+          type: editType,
+          width: result.width,
+          height: result.height,
+          params: params,
+          edited: true,  // 标记为已编辑
+        };
+        delete window.__editingResultIndex;
+        
+        renderRegionEditResults();
+        showRegionEditResult(editingIdx);
+        showToast("编辑完成", "success");
+      } else {
+        // 新建模式：添加新结果
+        regionEditResults.push({
+          url: result.local_path,
+          type: editType,
+          width: result.width,
+          height: result.height,
+          params: params,
+        });
+        
+        renderRegionEditResults();
+        showRegionEditResult(regionEditResults.length - 1);
+        showToast(editType === "face_swap" ? "换脸完成" : "图生图完成", "success");
+      }
       
       document.getElementById("applyRegionEditBtn").disabled = false;
       document.getElementById("saveCroppedImagesBtn").disabled = false;
-      showToast(editType === "face_swap" ? "换脸完成" : "图生图完成", "success");
       
     } catch (err) {
       console.error("区域编辑错误:", err);

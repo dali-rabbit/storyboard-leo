@@ -53,10 +53,10 @@
 
     let html = "";
     
-    // 添加"原图"选项在最前面
+    // 添加"原图"选项在最前面（无缩略图，只有文字）
     const isOriginalActive = currentResultIndex === -1;
     html += `
-      <div class="result-item ${isOriginalActive ? 'active' : ''}" data-idx="-1" style="cursor: pointer; padding: 8px; margin-bottom: 4px; border-radius: 4px; ${isOriginalActive ? 'background: #0d6efd; color: white;' : 'background: #2d2d2d; color: #fff;'}">
+      <div class="result-item ${isOriginalActive ? 'active' : ''}" data-idx="-1" style="cursor: pointer; padding: 8px; margin-bottom: 8px; border-radius: 4px; ${isOriginalActive ? 'background: #0d6efd; color: white;' : 'background: #2d2d2d; color: #fff;'}">
         <div class="d-flex align-items-center">
           <span class="me-2">🖼️</span>
           <span>原图</span>
@@ -64,13 +64,31 @@
       </div>
     `;
     
+    // 编辑结果显示缩略图
     regionEditResults.forEach((result, idx) => {
       const isActive = idx === currentResultIndex;
+      const editTypeLabel = result.type === "face_swap" ? "换脸" : "图生图";
+      const editTypeIcon = result.type === "face_swap" ? "👤" : "🎨";
+      
       html += `
-        <div class="result-item ${isActive ? 'active' : ''}" data-idx="${idx}" style="cursor: pointer; padding: 8px; margin-bottom: 4px; border-radius: 4px; ${isActive ? 'background: #0d6efd; color: white;' : 'background: #2d2d2d; color: #fff;'}">
-          <div class="d-flex justify-content-between align-items-center">
-            <span>结果 ${idx + 1}</span>
-            <button class="btn btn-sm btn-danger delete-result" data-idx="${idx}" style="padding: 2px 6px; font-size: 12px;">删除</button>
+        <div class="result-item ${isActive ? 'active' : ''}" data-idx="${idx}" style="cursor: pointer; padding: 8px; margin-bottom: 8px; border-radius: 4px; ${isActive ? 'background: #0d6efd;' : 'background: #2d2d2d;'} border: 2px solid ${isActive ? '#0d6efd' : 'transparent'};">
+          <div class="d-flex gap-2">
+            <!-- 缩略图 -->
+            <div style="flex-shrink: 0;">
+              <img src="${result.url}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px; ${isActive ? 'box-shadow: 0 0 0 2px #fff;' : ''}" 
+                   onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2280%22><rect fill=%22%23333%22 width=%2280%22 height=%2280%22/><text fill=%22%23999%22 x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22 dy=%22.3em%22>加载失败</text></svg>'">
+            </div>
+            <!-- 信息 -->
+            <div style="flex: 1; min-width: 0; color: ${isActive ? '#fff' : '#ccc'};">
+              <div class="d-flex justify-content-between align-items-start mb-1">
+                <span style="font-weight: 500;">${editTypeIcon} 结果 ${idx + 1}</span>
+                <button class="btn btn-sm btn-danger delete-result" data-idx="${idx}" style="padding: 2px 6px; font-size: 12px;">删除</button>
+              </div>
+              <div style="font-size: 12px; opacity: 0.8; margin-bottom: 4px;">
+                <span class="badge bg-secondary" style="font-size: 10px;">${editTypeLabel}</span>
+              </div>
+              ${result.params && result.params.prompt ? `<div style="font-size: 11px; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${result.params.prompt}">${result.params.prompt}</div>` : ''}
+            </div>
           </div>
         </div>
       `;
@@ -81,7 +99,7 @@
     // 添加点击事件
     container.querySelectorAll(".result-item").forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target.classList.contains("delete-result")) return;
+        if (e.target.classList.contains("delete-result") || e.target.closest(".delete-result")) return;
         const idx = parseInt(el.dataset.idx, 10);
         showRegionEditResult(idx);
       });
@@ -97,26 +115,91 @@
     });
   }
 
-  // 显示指定结果（idx=-1显示原图）
-  function showRegionEditResult(idx) {
+  // 显示指定结果（idx=-1显示原图，idx>=0显示合成预览）
+  async function showRegionEditResult(idx) {
     currentResultIndex = idx;
     renderRegionEditResults();
 
     if (idx === -1) {
       // 显示原图
-      if (currentOriginalImage) {
-        img.src = currentOriginalImage;
-        cropState.imgWidth = img.naturalWidth;
-        cropState.imgHeight = img.naturalHeight;
-      } else if (regionEditState.originalImageUrl) {
-        img.src = regionEditState.originalImageUrl;
+      const originalUrl = currentOriginalImage || regionEditState.originalImageUrl;
+      if (originalUrl) {
+        img.src = originalUrl;
+        // 等待加载完成后更新尺寸
+        await new Promise((resolve) => {
+          img.onload = () => {
+            cropState.imgWidth = img.naturalWidth;
+            cropState.imgHeight = img.naturalHeight;
+            render();
+            resolve();
+          };
+          img.onerror = resolve;
+          // 如果已经加载完成，直接执行
+          if (img.complete) {
+            cropState.imgWidth = img.naturalWidth;
+            cropState.imgHeight = img.naturalHeight;
+            render();
+            resolve();
+          }
+        });
       }
     } else if (idx >= 0 && idx < regionEditResults.length) {
-      // 显示结果图
+      // ✅ 显示合成预览：选区小图贴回原始大图
       const result = regionEditResults[idx];
-      img.src = result.url;
-      cropState.imgWidth = result.width || img.naturalWidth;
-      cropState.imgHeight = result.height || img.naturalHeight;
+      const originalUrl = currentOriginalImage || regionEditState.originalImageUrl;
+      
+      if (!originalUrl) {
+        // 没有原图，直接显示小图
+        img.src = result.url;
+        return;
+      }
+      
+      try {
+        // 创建合成预览
+        const tempCanvas = document.createElement("canvas");
+        const tempCtx = tempCanvas.getContext("2d");
+        
+        // 使用原始大图尺寸
+        const originalImg = new Image();
+        originalImg.crossOrigin = "anonymous";
+        await new Promise((resolve, reject) => {
+          originalImg.onload = resolve;
+          originalImg.onerror = reject;
+          originalImg.src = originalUrl;
+        });
+        
+        tempCanvas.width = originalImg.naturalWidth;
+        tempCanvas.height = originalImg.naturalHeight;
+        
+        // 绘制原图
+        tempCtx.drawImage(originalImg, 0, 0);
+        
+        // 绘制选区结果
+        const resultImg = new Image();
+        resultImg.crossOrigin = "anonymous";
+        await new Promise((resolve, reject) => {
+          resultImg.onload = resolve;
+          resultImg.onerror = reject;
+          resultImg.src = result.url;
+        });
+        
+        // 计算选区位置
+        const cropX = regionEditState.x * tempCanvas.width;
+        const cropY = regionEditState.y * tempCanvas.height;
+        
+        // 将小图贴到选区位置
+        tempCtx.drawImage(resultImg, cropX, cropY);
+        
+        // 显示合成结果
+        img.src = tempCanvas.toDataURL("image/jpeg", 0.92);
+        cropState.imgWidth = tempCanvas.width;
+        cropState.imgHeight = tempCanvas.height;
+        
+      } catch (err) {
+        console.error("显示合成预览失败:", err);
+        // 降级：直接显示小图
+        img.src = result.url;
+      }
     }
     render();
   }
@@ -474,10 +557,12 @@
         if (!result.success) throw new Error(result.error || "图生图失败");
       }
 
-      // 添加结果到列表
+      // 添加结果到列表（保存选区小图的尺寸信息）
       regionEditResults.push({
         url: result.local_path,
         type: editType,
+        width: result.width,
+        height: result.height,
         params: editType === "face_swap" ? {} : { prompt: document.getElementById("regionImg2ImgPrompt")?.value || "" },
       });
 
@@ -516,6 +601,8 @@
     
     try {
       let finalResultUrl = result.url;
+      let resultWidth = result.width || regionEditState.width * cropState.imgWidth;
+      let resultHeight = result.height || regionEditState.height * cropState.imgHeight;
       
       // 如果启用了颜色匹配，先调用颜色匹配API
       if (enableColorMatch) {
@@ -554,6 +641,12 @@
         showToast("颜色匹配完成", "success");
       }
       
+      // ✅ 使用原始大图作为合成基础（不是当前 canvas 显示的内容）
+      const originalUrl = currentOriginalImage || regionEditState.originalImageUrl;
+      if (!originalUrl) {
+        throw new Error("无法获取原图URL");
+      }
+      
       // 创建临时 canvas 来合成图片
       const tempCanvas = document.createElement("canvas");
       const tempCtx = tempCanvas.getContext("2d");
@@ -561,10 +654,19 @@
       tempCanvas.width = cropState.imgWidth;
       tempCanvas.height = cropState.imgHeight;
       
-      // 绘制原图
-      tempCtx.drawImage(img, 0, 0);
+      // ✅ 先绘制原始大图（不是当前 canvas）
+      const originalImg = new Image();
+      originalImg.crossOrigin = "anonymous";
       
-      // 载入编辑结果并合成
+      await new Promise((resolve, reject) => {
+        originalImg.onload = resolve;
+        originalImg.onerror = reject;
+        originalImg.src = originalUrl;
+      });
+      
+      tempCtx.drawImage(originalImg, 0, 0);
+      
+      // 载入编辑结果（选区小图）并合成到对应位置
       const resultImg = new Image();
       resultImg.crossOrigin = "anonymous";
       
@@ -574,12 +676,20 @@
         resultImg.src = finalResultUrl;
       });
       
+      // 计算选区在原图中的位置（像素坐标）
       const cropX = regionEditState.x * cropState.imgWidth;
       const cropY = regionEditState.y * cropState.imgHeight;
-      const cropW = regionEditState.width * cropState.imgWidth;
-      const cropH = regionEditState.height * cropState.imgHeight;
       
-      tempCtx.drawImage(resultImg, cropX, cropY, cropW, cropH);
+      console.log("[Apply] 合成选区到原图:", {
+        cropX, cropY,
+        resultWidth: resultImg.width,
+        resultHeight: resultImg.height,
+        targetWidth: regionEditState.width * cropState.imgWidth,
+        targetHeight: regionEditState.height * cropState.imgHeight,
+      });
+      
+      // 将选区小图贴到对应位置（保持小图尺寸）
+      tempCtx.drawImage(resultImg, cropX, cropY);
       
       // 更新主图片
       img.src = tempCanvas.toDataURL("image/jpeg", 0.92);

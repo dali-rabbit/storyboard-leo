@@ -1318,23 +1318,22 @@ def region_edit():
             result_image = result_image.resize((crop_w, crop_h), Image.LANCZOS)
             print(f"[Region Edit] 已调整尺寸为: ({crop_w}, {crop_h})")
         
-        # 将编辑结果覆盖回原图
-        final_image = original_image.copy()
-        final_image.paste(result_image, (crop_x, crop_y))
-        print(f"[Region Edit] 已覆盖回原图位置: ({crop_x}, {crop_y})")
-        
-        # 保存最终结果
+        # ✅ 保存选区小图（不是合成大图）用于前端预览
         dirs["results"].mkdir(parents=True, exist_ok=True)
         result_filename = f"region_edit_{uuid.uuid4().hex}.jpg"
         result_path = dirs["results"] / result_filename
-        final_image.save(result_path, "JPEG", quality=95)
+        result_image.save(result_path, "JPEG", quality=95)
         
         # 计算相对路径
         rel_path = str(result_path.relative_to(Path(".")))
         
+        print(f"[Region Edit] 选区编辑结果已保存: {result_path} ({crop_w}x{crop_h})")
+        
         return jsonify({
             "success": True,
             "local_path": "/history/" + rel_path.replace("\\", "/"),
+            "width": crop_w,
+            "height": crop_h,
         })
         
     except Exception as e:

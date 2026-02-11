@@ -1342,5 +1342,169 @@ def region_edit():
         return jsonify({"error": f"Region edit failed: {str(e)}"}), 500
 
 
+@app.route("/color-match", methods=["POST"])
+def color_match():
+    """
+    颜色匹配API：将目标图片的色调匹配到参考图片的色调
+    
+    请求参数:
+    - target_url: 目标图片URL（需要调整色调的图片）
+    - ref_url: 参考图片URL（原图，提供色调参考）
+    - method: 颜色匹配方法，可选 'mkl', 'hm', 'reinhard', 'mvgd', 'hm-mvgd-hm', 'hm-mkl-hm'，默认 'mkl'
+    - strength: 匹配强度，0.0-1.0，默认 1.0
+    - film_id: 影片ID
+    
+    返回:
+    - local_path: 处理后的图片本地路径
+    """
+    try:
+        data = request.get_json()
+        target_url = (data.get("target_url") or "").strip()
+        ref_url = (data.get("ref_url") or "").strip()
+        method = data.get("method", "mkl")
+        strength = float(data.get("strength", 1.0))
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
+        
+        if not target_url or not ref_url:
+            return jsonify({"error": "Missing target_url or ref_url"}), 400
+        
+        # 验证 method 参数
+        valid_methods = ['mkl', 'hm', 'reinhard', 'mvgd', 'hm-mvgd-hm', 'hm-mkl-hm']
+        if method not in valid_methods:
+            method = 'mkl'
+        
+        # 限制 strength 范围
+        strength = max(0.0, min(1.0, strength))
+        
+        # 加载目标图片
+        try:
+            if target_url.startswith("data:image"):
+                header, encoded = target_url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                target_image = Image.open(BytesIO(image_data)).convert("RGB")
+            elif target_url.startswith("http://") or target_url.startswith("https://"):
+                resp = requests.get(target_url, timeout=30)
+                resp.raise_for_status()
+                target_image = Image.open(BytesIO(resp.content)).convert("RGB")
+            elif os.path.exists(target_url):
+                target_image = Image.open(target_url).convert("RGB")
+            else:
+                return jsonify({"error": f"Unsupported target image source"}), 400
+        except Exception as e:
+            print(f"[Color Match] 加载目标图片失败: {e}")
+            return jsonify({"error": "Failed to load target image"}), 500
+        
+        # 加载参考图片
+        try:
+            if ref_url.startswith("data:image"):
+                header, encoded = ref_url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                ref_image = Image.open(BytesIO(image_data)).convert("RGB")
+            elif ref_url.startswith("http://") or ref_url.startswith("https://"):
+                resp = requests.get(ref_url, timeout=30)
+                resp.raise_for_status()
+                ref_image = Image.open(BytesIO(resp.content)).convert("RGB")
+            elif os.path.exists(ref_url):
+                ref_image = Image.open(ref_url).convert("RGB")
+            else:
+                return jsonify({"error": f"Unsupported ref image source"}), 400
+        except Exception as e:
+            print(f"[Color Match] 加载参考图片失败: {e}")
+            return jsonify({"error": "Failed to load reference image"}), 500
+        
+        # 调整参考图片尺寸以匹配目标图片
+        if ref_image.size != target_image.size:
+            ref_image = ref_image.resize(target_image.size, Image.LANCZOS)
+        
+        # 使用 color-matcher 进行颜色匹配
+        try:
+            from color_matcher import ColorMatcher
+            import numpy as np
+            
+            # 转换为 numpy 数组 (H, W, C) 格式，值范围 0-255
+            target_np = np.array(target_image).astype(np.float32)
+            ref_np = np.array(ref_image).astype(np.float32)
+            
+            # 创建 ColorMatcher 实例
+            cm = ColorMatcher()
+            
+            # 执行颜色匹配
+            print(f"[Color Match] 使用 {method} 方法进行颜色匹配，strength={strength}")
+            result_np = cm.transfer(src=target_np, ref=ref_np, method=method)
+            
+            # 应用强度混合
+            if strength < 1.0:
+                result_np = target_np + strength * (result_np - target_np)
+            
+            # 裁剪到有效范围
+            result_np = np.clip(result_np, 0, 255).astype(np.uint8)
+            
+            # 转回 PIL Image
+            result_image = Image.fromarray(result_np)
+            
+        except ImportError:
+            print("[Color Match] color-matcher 库未安装，使用简单直方图匹配")
+            # 降级方案：使用 Pillow 的简单直方图匹配
+            result_image = simple_histogram_match(target_image, ref_image, strength)
+        except Exception as e:
+            print(f"[Color Match] 颜色匹配失败: {e}")
+            return jsonify({"error": f"Color matching failed: {str(e)}"}), 500
+        
+        # 保存结果
+        dirs = get_film_dirs(film_id)
+        dirs["results"].mkdir(parents=True, exist_ok=True)
+        result_filename = f"color_match_{uuid.uuid4().hex}.jpg"
+        result_path = dirs["results"] / result_filename
+        result_image.save(result_path, "JPEG", quality=95)
+        
+        rel_path = str(result_path.relative_to(Path(".")))
+        
+        print(f"[Color Match] 处理完成: {result_path}")
+        return jsonify({
+            "success": True,
+            "local_path": "/history/" + rel_path.replace("\\", "/"),
+        })
+        
+    except Exception as e:
+        print(f"[Color Match Error] {e}")
+        return jsonify({"error": f"Color match failed: {str(e)}"}), 500
+
+
+def simple_histogram_match(target, reference, strength=1.0):
+    """
+    简单的直方图匹配（降级方案，当 color-matcher 不可用时使用）
+    基于均值和标准差的传递
+    """
+    import numpy as np
+    
+    target_np = np.array(target).astype(np.float32)
+    ref_np = np.array(reference).astype(np.float32)
+    
+    # 分别对每个通道进行匹配
+    result = target_np.copy()
+    for c in range(3):
+        target_mean = target_np[:, :, c].mean()
+        target_std = target_np[:, :, c].std()
+        ref_mean = ref_np[:, :, c].mean()
+        ref_std = ref_np[:, :, c].std()
+        
+        # 避免除以零
+        if target_std < 1e-6:
+            target_std = 1e-6
+        
+        # 应用 Reinhard 颜色传递
+        normalized = (target_np[:, :, c] - target_mean) / target_std
+        result[:, :, c] = normalized * ref_std + ref_mean
+    
+    # 应用强度混合
+    if strength < 1.0:
+        result = target_np + strength * (result - target_np)
+    
+    # 裁剪并转换为 uint8
+    result = np.clip(result, 0, 255).astype(np.uint8)
+    
+    return Image.fromarray(result)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)

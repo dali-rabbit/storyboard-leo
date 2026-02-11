@@ -858,6 +858,32 @@
                             </div>
                         </div>
 
+                        <!-- 颜色匹配选项 -->
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    id="enableColorMatch"
+                                    checked
+                                />
+                                <label class="form-check-label" for="enableColorMatch">
+                                    自动颜色匹配（使编辑结果色调与原图一致）
+                                </label>
+                            </div>
+                            <div id="colorMatchMethodSection" class="mt-2 ms-4">
+                                <label class="form-label small">匹配方法</label>
+                                <select id="colorMatchMethod" class="form-select form-select-sm" style="width: auto;">
+                                    <option value="mkl">MKL（推荐）</option>
+                                    <option value="hm">直方图匹配</option>
+                                    <option value="reinhard">Reinhard</option>
+                                    <option value="mvgd">MVGD</option>
+                                    <option value="hm-mvgd-hm">HM-MVGD-HM</option>
+                                    <option value="hm-mkl-hm">HM-MKL-HM</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <!-- 换脸选项 -->
                         <div id="regionFaceSwapSection">
                             <label class="form-label">选择参考面部</label>
@@ -918,7 +944,11 @@
         <script src="{{ url_for('static', filename='plugin-settings.js') }}"></script>
         <script src="{{ url_for('static', filename='upload.js') }}"></script>
         <script src="{{ url_for('static', filename='quick-access.js') }}"></script>
-        <script src="{{ url_for('static', filename='image-edit.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit/core.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit/utils.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit/crop-mode.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit/region-mode.js') }}"></script>
+        <script src="{{ url_for('static', filename='image-edit/main.js') }}"></script>
         <script src="{{ url_for('static', filename='storyboard.js') }}"></script>
         <script src="{{ url_for('static', filename='main.js') }}"></script>
     </body>

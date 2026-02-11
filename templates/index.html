@@ -884,6 +884,21 @@
                             </div>
                         </div>
 
+                        <!-- 边界融合选项 -->
+                        <div class="mb-3">
+                            <label class="form-label">边界融合</label>
+                            <select id="seamlessMethod" class="form-select" style="width: auto;">
+                                <option value="none">不融合（直接覆盖）</option>
+                                <option value="feather">羽化边缘（透明渐变）</option>
+                                <option value="poisson_normal" selected>泊松融合 - 正常模式（推荐）</option>
+                                <option value="poisson_mixed">泊松融合 - 混合模式</option>
+                            </select>
+                            <div id="featherRadiusSection" class="mt-2" style="display: none;">
+                                <label class="form-label small">羽化半径: <span id="featherRadiusValue">10</span>px</label>
+                                <input type="range" class="form-range" id="featherRadius" min="1" max="50" value="10" style="max-width: 200px;">
+                            </div>
+                        </div>
+
                         <!-- 换脸选项 -->
                         <div id="regionFaceSwapSection">
                             <label class="form-label">选择参考面部</label>

@@ -480,6 +480,18 @@
     document.getElementById("colorMatchMethodSection").style.display = enabled ? "block" : "none";
   });
 
+  // 边界融合方法切换
+  document.getElementById("seamlessMethod")?.addEventListener("change", (e) => {
+    const method = e.target.value;
+    const isFeather = method === "feather";
+    document.getElementById("featherRadiusSection").style.display = isFeather ? "block" : "none";
+  });
+
+  // 羽化半径滑块
+  document.getElementById("featherRadius")?.addEventListener("input", (e) => {
+    document.getElementById("featherRadiusValue").textContent = e.target.value;
+  });
+
   // 确认编辑
   document.getElementById("confirmRegionEdit")?.addEventListener("click", async () => {
     const editType = document.querySelector('input[name="regionEditType"]:checked')?.value || "img2img";
@@ -641,60 +653,111 @@
         showToast("颜色匹配完成", "success");
       }
       
+      // ✅ 获取边界融合设置
+      const seamlessMethod = document.getElementById("seamlessMethod")?.value || "poisson_normal";
+      const featherRadius = parseInt(document.getElementById("featherRadius")?.value || "10");
+      
       // ✅ 使用原始大图作为合成基础（不是当前 canvas 显示的内容）
       const originalUrl = currentOriginalImage || regionEditState.originalImageUrl;
       if (!originalUrl) {
         throw new Error("无法获取原图URL");
       }
       
-      // 创建临时 canvas 来合成图片
-      const tempCanvas = document.createElement("canvas");
-      const tempCtx = tempCanvas.getContext("2d");
-      
-      tempCanvas.width = cropState.imgWidth;
-      tempCanvas.height = cropState.imgHeight;
-      
-      // ✅ 先绘制原始大图（不是当前 canvas）
-      const originalImg = new Image();
-      originalImg.crossOrigin = "anonymous";
-      
-      await new Promise((resolve, reject) => {
-        originalImg.onload = resolve;
-        originalImg.onerror = reject;
-        originalImg.src = originalUrl;
-      });
-      
-      tempCtx.drawImage(originalImg, 0, 0);
-      
-      // 载入编辑结果（选区小图）并合成到对应位置
-      const resultImg = new Image();
-      resultImg.crossOrigin = "anonymous";
-      
-      await new Promise((resolve, reject) => {
-        resultImg.onload = resolve;
-        resultImg.onerror = reject;
-        resultImg.src = finalResultUrl;
-      });
-      
       // 计算选区在原图中的位置（像素坐标）
       const cropX = regionEditState.x * cropState.imgWidth;
       const cropY = regionEditState.y * cropState.imgHeight;
       
-      console.log("[Apply] 合成选区到原图:", {
-        cropX, cropY,
-        resultWidth: resultImg.width,
-        resultHeight: resultImg.height,
-        targetWidth: regionEditState.width * cropState.imgWidth,
-        targetHeight: regionEditState.height * cropState.imgHeight,
-      });
+      let finalImageUrl;
       
-      // 将选区小图贴到对应位置（保持小图尺寸）
-      tempCtx.drawImage(resultImg, cropX, cropY);
+      // 如果选择了融合方法，调用后端 API
+      if (seamlessMethod !== "none") {
+        document.getElementById("fullscreenMask").querySelector("div > div").innerHTML = 
+          '<div class="spinner-border text-light mb-2" role="status"></div><div>正在进行边界融合...</div>';
+        
+        console.log("[Seamless Clone] 调用边界融合 API:", {
+          method: seamlessMethod,
+          featherRadius: seamlessMethod === "feather" ? featherRadius : undefined,
+          x: Math.round(cropX),
+          y: Math.round(cropY),
+        });
+        
+        const resp = await fetch("/seamless-clone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source_url: finalResultUrl,
+            target_url: originalUrl,
+            x: Math.round(cropX),
+            y: Math.round(cropY),
+            method: seamlessMethod,
+            feather_radius: featherRadius,
+            film_id: filmId,
+          }),
+        });
+        
+        const data = await resp.json();
+        if (!data.success) {
+          throw new Error(data.error || "边界融合失败");
+        }
+        
+        finalImageUrl = data.local_path;
+        console.log("[Seamless Clone] 融合完成:", data.method);
+        
+      } else {
+        // 不融合，使用前端合成（直接覆盖）
+        console.log("[Apply] 不使用融合，直接覆盖");
+        
+        // 创建临时 canvas 来合成图片
+        const tempCanvas = document.createElement("canvas");
+        const tempCtx = tempCanvas.getContext("2d");
+        
+        tempCanvas.width = cropState.imgWidth;
+        tempCanvas.height = cropState.imgHeight;
+        
+        // 先绘制原始大图
+        const originalImg = new Image();
+        originalImg.crossOrigin = "anonymous";
+        
+        await new Promise((resolve, reject) => {
+          originalImg.onload = resolve;
+          originalImg.onerror = reject;
+          originalImg.src = originalUrl;
+        });
+        
+        tempCtx.drawImage(originalImg, 0, 0);
+        
+        // 载入编辑结果（选区小图）并合成到对应位置
+        const resultImg = new Image();
+        resultImg.crossOrigin = "anonymous";
+        
+        await new Promise((resolve, reject) => {
+          resultImg.onload = resolve;
+          resultImg.onerror = reject;
+          resultImg.src = finalResultUrl;
+        });
+        
+        // 将选区小图贴到对应位置
+        tempCtx.drawImage(resultImg, cropX, cropY);
+        
+        finalImageUrl = tempCanvas.toDataURL("image/jpeg", 0.92);
+      }
       
       // 更新主图片
-      img.src = tempCanvas.toDataURL("image/jpeg", 0.92);
+      img.src = finalImageUrl;
       
-      showToast("已应用编辑结果" + (enableColorMatch ? "（含颜色匹配）" : ""), "success");
+      // 构建成功提示
+      let successMsg = "已应用编辑结果";
+      if (enableColorMatch) successMsg += "（颜色匹配）";
+      if (seamlessMethod !== "none") {
+        const methodNames = {
+          "feather": "羽化边缘",
+          "poisson_normal": "泊松融合",
+          "poisson_mixed": "泊松混合"
+        };
+        successMsg += enableColorMatch ? " + " : "（";
+        successMsg += methodNames[seamlessMethod] + "）";
+      }
+      showToast(successMsg, "success");
       
     } catch (err) {
       console.error("应用编辑结果错误:", err);

@@ -1469,6 +1469,228 @@ def color_match():
         return jsonify({"error": f"Color match failed: {str(e)}"}), 500
 
 
+@app.route("/seamless-clone", methods=["POST"])
+def seamless_clone():
+    """
+    无缝融合API：将选区小图无缝融合到原图指定位置
+    
+    请求参数:
+    - source_url: 选区小图URL（编辑后的结果）
+    - target_url: 原图URL（要融合到的背景）
+    - x, y: 选区在原图中的位置（像素坐标）
+    - method: 融合方法，可选 'none' | 'feather' | 'poisson_normal' | 'poisson_mixed'
+    - feather_radius: 羽化半径（仅当 method='feather' 时有效），默认 10
+    - film_id: 影片ID
+    
+    返回:
+    - local_path: 融合后的完整图片路径
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return jsonify({"error": "OpenCV not installed, run: pip install opencv-python"}), 500
+    
+    try:
+        data = request.get_json()
+        source_url = (data.get("source_url") or "").strip()
+        target_url = (data.get("target_url") or "").strip()
+        x = int(data.get("x", 0))
+        y = int(data.get("y", 0))
+        method = data.get("method", "none")
+        feather_radius = int(data.get("feather_radius", 10))
+        film_id = data.get("film_id", DEFAULT_FILM_ID)
+        
+        if not source_url or not target_url:
+            return jsonify({"error": "Missing source_url or target_url"}), 400
+        
+        # 验证 method 参数
+        valid_methods = ['none', 'feather', 'poisson_normal', 'poisson_mixed']
+        if method not in valid_methods:
+            method = 'none'
+        
+        # 如果不需要融合，直接返回原图
+        if method == 'none':
+            return jsonify({
+                "success": True,
+                "local_path": target_url,
+                "method": "none"
+            })
+        
+        # 加载选区小图
+        try:
+            if source_url.startswith("data:image"):
+                header, encoded = source_url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                source_image = Image.open(BytesIO(image_data)).convert("RGB")
+            elif source_url.startswith("http://") or source_url.startswith("https://"):
+                resp = requests.get(source_url, timeout=30)
+                resp.raise_for_status()
+                source_image = Image.open(BytesIO(resp.content)).convert("RGB")
+            elif os.path.exists(source_url):
+                source_image = Image.open(source_url).convert("RGB")
+            else:
+                return jsonify({"error": f"Unsupported source image"}), 400
+        except Exception as e:
+            print(f"[Seamless Clone] 加载选区图失败: {e}")
+            return jsonify({"error": "Failed to load source image"}), 500
+        
+        # 加载原图
+        try:
+            if target_url.startswith("data:image"):
+                header, encoded = target_url.split(",", 1)
+                image_data = base64.b64decode(encoded)
+                target_image = Image.open(BytesIO(image_data)).convert("RGB")
+            elif target_url.startswith("http://") or target_url.startswith("https://"):
+                resp = requests.get(target_url, timeout=30)
+                resp.raise_for_status()
+                target_image = Image.open(BytesIO(resp.content)).convert("RGB")
+            elif os.path.exists(target_url):
+                target_image = Image.open(target_url).convert("RGB")
+            else:
+                return jsonify({"error": f"Unsupported target image"}), 400
+        except Exception as e:
+            print(f"[Seamless Clone] 加载原图失败: {e}")
+            return jsonify({"error": "Failed to load target image"}), 500
+        
+        # 转换为 OpenCV 格式 (BGR)
+        source_cv = cv2.cvtColor(np.array(source_image), cv2.COLOR_RGB2BGR)
+        target_cv = cv2.cvtColor(np.array(target_image), cv2.COLOR_RGB2BGR)
+        
+        h, w = source_cv.shape[:2]
+        target_h, target_w = target_cv.shape[:2]
+        
+        # 确保选区在原图范围内
+        if x < 0: x = 0
+        if y < 0: y = 0
+        if x + w > target_w: w = target_w - x
+        if y + h > target_h: h = target_h - y
+        
+        if w <= 0 or h <= 0:
+            return jsonify({"error": "Invalid region size"}), 400
+        
+        # 调整 source 大小以适配可用区域
+        if source_cv.shape[:2] != (h, w):
+            source_cv = cv2.resize(source_cv, (w, h))
+        
+        result_cv = target_cv.copy()
+        
+        if method == 'feather':
+            # Alpha 羽化：边缘透明度渐变
+            print(f"[Seamless Clone] 使用羽化融合，半径: {feather_radius}px")
+            result_cv = feather_blend(source_cv, target_cv, x, y, feather_radius)
+            
+        elif method in ('poisson_normal', 'poisson_mixed'):
+            # 泊松融合
+            print(f"[Seamless Clone] 使用泊松融合，方法: {method}")
+            
+            # 创建 mask（选区形状）
+            mask = np.ones((h, w), dtype=np.uint8) * 255
+            
+            # 稍微收缩 mask 边缘，避免边界问题
+            kernel = np.ones((3, 3), np.uint8)
+            mask = cv2.erode(mask, kernel, iterations=1)
+            
+            # 计算中心点
+            center = (x + w // 2, y + h // 2)
+            
+            # 选择融合模式
+            if method == 'poisson_normal':
+                mode = cv2.NORMAL_CLONE
+            else:  # poisson_mixed
+                mode = cv2.MIXED_CLONE
+            
+            try:
+                result_cv = cv2.seamlessClone(source_cv, target_cv, mask, center, mode)
+            except cv2.error as e:
+                print(f"[Seamless Clone] 泊松融合失败，降级到直接覆盖: {e}")
+                # 降级：直接覆盖
+                result_cv[y:y+h, x:x+w] = source_cv
+        
+        # 转回 PIL Image
+        result_image = Image.fromarray(cv2.cvtColor(result_cv, cv2.COLOR_BGR2RGB))
+        
+        # 保存结果
+        dirs = get_film_dirs(film_id)
+        dirs["results"].mkdir(parents=True, exist_ok=True)
+        result_filename = f"seamless_{method}_{uuid.uuid4().hex}.jpg"
+        result_path = dirs["results"] / result_filename
+        result_image.save(result_path, "JPEG", quality=95)
+        
+        rel_path = str(result_path.relative_to(Path(".")))
+        
+        print(f"[Seamless Clone] 融合完成: {result_path}, 方法: {method}")
+        return jsonify({
+            "success": True,
+            "local_path": "/history/" + rel_path.replace("\\", "/"),
+            "method": method
+        })
+        
+    except Exception as e:
+        print(f"[Seamless Clone Error] {e}")
+        return jsonify({"error": f"Seamless clone failed: {str(e)}"}), 500
+
+
+def feather_blend(source, target, x, y, radius=10):
+    """
+    Alpha 羽化融合：边缘透明度渐变
+    
+    Args:
+        source: 选区小图 (numpy array, BGR)
+        target: 原图 (numpy array, BGR)
+        x, y: 左上角位置
+        radius: 羽化半径（像素）
+    
+    Returns:
+        融合后的完整图
+    """
+    import numpy as np
+    
+    h, w = source.shape[:2]
+    result = target.copy()
+    
+    # 创建渐变 mask
+    mask = np.ones((h, w), dtype=np.float32)
+    
+    # 四边渐变
+    r = min(radius, h // 2, w // 2)
+    
+    if r > 0:
+        # 上边缘
+        for i in range(r):
+            alpha = i / r
+            mask[i, :] = alpha
+        
+        # 下边缘
+        for i in range(r):
+            alpha = i / r
+            mask[h - 1 - i, :] = alpha
+        
+        # 左边缘
+        for i in range(r):
+            alpha = i / r
+            mask[:, i] = np.minimum(mask[:, i], alpha)
+        
+        # 右边缘
+        for i in range(r):
+            alpha = i / r
+            mask[:, w - 1 - i] = np.minimum(mask[:, w - 1 - i], alpha)
+    
+    # 扩展 mask 到 3 通道
+    mask_3ch = np.stack([mask] * 3, axis=2)
+    
+    # 提取目标区域
+    target_roi = result[y:y+h, x:x+w]
+    
+    # 混合：source * mask + target * (1 - mask)
+    blended = source.astype(np.float32) * mask_3ch + target_roi.astype(np.float32) * (1 - mask_3ch)
+    
+    # 放回结果
+    result[y:y+h, x:x+w] = blended.astype(np.uint8)
+    
+    return result
+
+
 def simple_histogram_match(target, reference, strength=1.0):
     """
     简单的直方图匹配（降级方案，当 color-matcher 不可用时使用）

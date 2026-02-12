@@ -596,9 +596,14 @@
       regionEditState.originalImageUrl = preservedOriginalUrl;
       currentOriginalImage = preservedOriginalUrl;
       
-      // 重新选取后保持选区编辑模式启用状态
+      // 重新选取后保持选区编辑模式启用状态，但选区未确定
       regionEditState.enabled = true;
+      regionEditState.regionSelected = false;  // 确保选区未选中，不显示绿色边框
+      regionEditState.regionConfirmed = false;
       regionEditStep = 0;
+      
+      // 重绘画布，确保边框消失
+      render();
     }
   });
 

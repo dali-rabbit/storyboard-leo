@@ -107,9 +107,19 @@
     document.getElementById("regionEditActionBtn")?.classList.add("d-none");
     document.getElementById("saveCroppedImagesBtn").disabled = true;
     
-    // 清除画布
+    // 确保区域编辑完全禁用（避免绿色边框残留）
+    if (typeof regionEditState !== "undefined") {
+      regionEditState.enabled = false;
+      regionEditState.regionSelected = false;
+      regionEditState.regionConfirmed = false;
+    }
+    
+    // 清除画布并重绘（确保边框消失）
     if (canvas && ctx) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (typeof render === "function") {
+        render();
+      }
     }
     
     showToast("画布已清空", "info");

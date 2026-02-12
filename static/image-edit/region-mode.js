@@ -586,20 +586,19 @@
         }
       }
       
+      // 保存当前原图URL（resetRegionEditState会清空它）
+      const preservedOriginalUrl = currentOriginalImage || regionEditState.originalImageUrl || img.src;
+      
+      // ✅ 使用resetRegionEditState()完整重置所有状态，包括编辑历史
+      resetRegionEditState();
+      
+      // ✅ 恢复保存的原图URL
+      regionEditState.originalImageUrl = preservedOriginalUrl;
+      currentOriginalImage = preservedOriginalUrl;
+      
+      // 重新选取后保持选区编辑模式启用状态
+      regionEditState.enabled = true;
       regionEditStep = 0;
-      regionEditState.regionSelected = false;
-      regionEditState.regionConfirmed = false;
-      regionEditState.x = 0.25;
-      regionEditState.y = 0.25;
-      regionEditState.width = 0.5;
-      regionEditState.height = 0.5;
-      btn.textContent = "选取区域";
-      btn.classList.remove("btn-warning");
-      btn.classList.add("btn-success");
-      document.getElementById("regionEditActionBtn").classList.add("d-none");
-      document.getElementById("regionEditActionBtn").disabled = true;
-      document.getElementById("applyRegionEditBtn").disabled = true;
-      render();
     }
   });
 
@@ -650,6 +649,13 @@
     regionEditExtraImages = [];
     renderRegionEditExtraImages();
     
+    // ✅ 换脸默认不融合
+    const seamlessMethod = document.getElementById("seamlessMethod");
+    if (seamlessMethod) {
+      seamlessMethod.value = "none";
+      seamlessMethod.dispatchEvent(new Event("change"));
+    }
+    
     const modal = new bootstrap.Modal(document.getElementById("regionEditModal"));
     modal.show();
   });
@@ -660,6 +666,20 @@
       const isFaceSwap = e.target.value === "face_swap";
       document.getElementById("regionFaceSwapSection").style.display = isFaceSwap ? "block" : "none";
       document.getElementById("regionImg2ImgSection").style.display = isFaceSwap ? "none" : "block";
+      
+      // ✅ 根据编辑类型设置默认融合方式
+      const seamlessMethod = document.getElementById("seamlessMethod");
+      if (seamlessMethod) {
+        if (isFaceSwap) {
+          // 换脸：默认不融合
+          seamlessMethod.value = "none";
+        } else {
+          // 图生图：默认泊松融合
+          seamlessMethod.value = "poisson_normal";
+        }
+        // 触发change事件更新UI
+        seamlessMethod.dispatchEvent(new Event("change"));
+      }
     });
   });
 
@@ -993,6 +1013,11 @@
         successMsg += methodNames[seamlessMethod] + "）";
       }
       showToast(successMsg, "success");
+      
+      // ✅ 应用成功后清空编辑记录，避免重复提示"未应用"
+      regionEditResults = [];
+      currentResultIndex = -1;
+      renderRegionEditResults();
       
     } catch (err) {
       console.error("应用编辑结果错误:", err);

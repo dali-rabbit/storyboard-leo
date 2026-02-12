@@ -557,6 +557,13 @@
                                 >
                                     保存
                                 </button>
+                                <button
+                                    id="clearCanvasBtn"
+                                    class="btn btn-outline-danger btn-sm"
+                                    title="清空画布，恢复初始状态"
+                                >
+                                    🗑️ 清空
+                                </button>
                             </div>
                         </div>
 
@@ -858,14 +865,13 @@
                             </div>
                         </div>
 
-                        <!-- 颜色匹配选项 -->
-                        <div class="mb-3">
+                        <!-- 颜色匹配选项（已隐藏，如需恢复删除 style） -->
+                        <div class="mb-3" style="display: none;">
                             <div class="form-check">
                                 <input
                                     class="form-check-input"
                                     type="checkbox"
                                     id="enableColorMatch"
-                                    checked
                                 />
                                 <label class="form-check-label" for="enableColorMatch">
                                     自动颜色匹配（使编辑结果色调与原图一致）

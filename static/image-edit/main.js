@@ -73,4 +73,45 @@
     };
     reader.readAsDataURL(file);
   });
+
+  // 清空画布功能
+  document.getElementById("clearCanvasBtn")?.addEventListener("click", () => {
+    // 确认对话框
+    if (!confirm("确定要清空画布吗？这将清除所有编辑内容和选区。")) {
+      return;
+    }
+    
+    // 清空图片
+    img.src = "";
+    
+    // 重置裁剪状态
+    cropState.enabled = false;
+    cropState.imgWidth = 0;
+    cropState.imgHeight = 0;
+    
+    // 重置区域编辑状态（如果函数存在）
+    if (typeof resetRegionEditState === "function") {
+      resetRegionEditState();
+    }
+    
+    // 显示占位提示
+    const placeholder = document.getElementById("imageEditPlaceholder");
+    if (placeholder) {
+      placeholder.classList.add("d-flex");
+      placeholder.style.display = "flex";
+    }
+    
+    // 禁用相关按钮
+    document.getElementById("cropToQuadrantsBtn").disabled = true;
+    document.getElementById("startRegionEditBtn").disabled = true;
+    document.getElementById("regionEditActionBtn")?.classList.add("d-none");
+    document.getElementById("saveCroppedImagesBtn").disabled = true;
+    
+    // 清除画布
+    if (canvas && ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    
+    showToast("画布已清空", "info");
+  });
 })();
